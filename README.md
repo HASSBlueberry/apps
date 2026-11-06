@@ -1,5 +1,5 @@
 # BlueberryFaygo Home Assistant add-ons
 
-Add this repository URL to Home Assistant OS under Settings, Add-ons, Add-on Store, Repositories.
+Add `https://git.crit.rip/BlueberryFaygo/apps` to Home Assistant under Settings, Apps, App Store, Repositories.
 
-The BlueberryProxy add-on is a standalone, general-purpose LAN DNS and proxy service.
+BlueberryProxy provides LAN DNS, proxying and discovery. BlueberryQuantum manages gateway providers.

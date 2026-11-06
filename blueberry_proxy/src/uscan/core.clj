@@ -88,7 +88,8 @@
       (throw (ex-info "Inventory requires source, explicit CIDRs, and up to 4096 devices" {})))
     ;; Validate the entire batch before publishing any external inventory evidence.
     (doseq [record records]
-      (when-not (and (map? record) (scope/contains-ip? (:networks params) (:ip record)))
+      (when-not (and (map? record) (or (nil? (:hostname record)) (string? (:hostname record)))
+                     (scope/contains-ip? (:networks params) (:ip record)))
         (throw (ex-info "Inventory IP is outside its advertised networks" {}))))
     (let [job-id (str "inventory-" (UUID/randomUUID))]
       (doseq [record records]

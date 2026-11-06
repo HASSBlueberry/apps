@@ -53,3 +53,7 @@ frontend integration and automatically registered management card. Query
 history now returns the latest retained entries first, and runtime statistics
 are excluded from saved configuration. WebSocket delivery uses bounded queues,
 control frames, and shared HTTP access for the dashboard.
+
+### App repository validation fix
+
+Removed the invalid fixed-port `webui` field. The dashboard remains available through Ingress. Generated app packages are validated before deployment, and repository metadata points to the published apps repository.
