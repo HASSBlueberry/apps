@@ -1,18 +1,40 @@
 # BlueberryQuantum
 
-BlueberryQuantum is a separate local application and Home Assistant integration for multiple gateway and DNS providers. It includes a Quantum G3100 CGI adapter, a BlueberryProxy DNS adapter and an external HTTP JSON adapter. Verizon-specific code stays here. BlueberryProxy remains independent.
+BlueberryQuantum is an independent local app and Home Assistant integration for gateway and DNS providers. Protocol adapters own their configuration schemas, resource schemas, current values, capabilities and setup actions. Both Ingress and the HA card use the same renderer. Neither frontend embeds a provider list, provider URLs, settings fields or router-specific forms.
 
-Install the app from the generated `dist/apps` repository and open its Home Assistant Ingress panel. Add a G3100 provider using `https://192.168.1.1`, username `admin` and your gateway administration password. Select the self-signed certificate option if required by your router. Verification is configurable per provider and remains enabled by default. Credentials are saved in the app's private data directory with mode 0600 and omitted from provider-list responses. Back up this directory as confidential data.
+Install the generated app from `https://git.crit.rip/BlueberryFaygo/apps` and open its Ingress panel. In Provider settings, select a provider type and enter its advertised fields. Configuration changes retain blank credentials only at the same provider type and URL. Changing destinations clears old credentials. Credentials are saved privately with mode 0600 and omitted from configuration responses.
 
-Start with reads. Use Inspect gateway SPA to inspect the router's own public assets, then enable writes in provider settings when you want DNS or port-forward management. Saving settings resets the session, so inspect again afterward. DNS and forwarding changes first produce a five-minute review plan. Applying consumes the plan and rejects it if the resource snapshot changed. The returned snapshot shows the subsequent state. A successful submission alone does not establish that the gateway persisted a change.
+For G3100, the provider supplies the default `https://192.168.1.1` URL and `admin` username. Enter the router administration password. Disable certificate verification for that provider if its gateway uses a self-signed certificate. Use Inspect provider to check the router's public SPA, then enable supported writes in its configuration. Saving configuration resets its session and inspection, so inspect again after enabling writes. Eero requires verified HTTPS and offers verification-code sign-in through provider-defined actions.
 
-The G3100 adapter implements challenge authentication, known-device inventory, primary LAN CIDR discovery, IPv4 DNS host entries and single-port TCP, UDP or combined forwarding. The gateway's advertised DNS form-field identifiers are read dynamically. It creates or deletes forwarding rules, and creates, updates or deletes DNS host entries. Forward ranges, schedules, firewall policy changes, DHCP DNS assignment and IPv6 DNS writes are not implemented. Existing raw forwarding records retain the gateway's port-rule references.
+Each settings section displays the provider's current values. Supported writes use a five-minute review plan tied to that provider, selected network, resource state and resource schema. Changing the selected provider clears the frontend review. Reconfiguration and network selection invalidate backend plans. Submitted writes return refreshed state; HTTP acceptance alone does not prove that firmware persisted a change. Forms cannot be edited while an operation is completing.
 
-The read-only probe against the requested gateway successfully collected 91 public Vue/Webpack assets and confirmed login, DNS and forwarding request construction. Authentication and writes have been tested against a simulated gateway using those observed schemas. No real gateway password was available to this development session, so live authenticated inventory and writes remain unvalidated. Authentication is attempted once per configured session. Use Sign in again to retry after fixing credentials, rather than repeatedly submitting a rejected password during polling.
+| Feature | G3100 | Eero | BlueberryProxy |
+| --- | --- | --- | --- |
+| Devices | Connected inventory, block and restore access | Connected inventory, pause and restore internet access | Discovery evidence, no router disconnect control |
+| UPnP | Status and on/off | Status and on/off when advertised | Unsupported |
+| Router lighting | Status, on/off, brightness and timeout | Per-node status and on/off when advertised | Unsupported |
+| Port forwarding | List, create, edit, enabled state and delete | List, create, edit, enabled state and delete | Unsupported as WAN NAT |
+| DHCP | Primary LAN pool on/off, range and lease time | Automatic/custom subnet and lease range | Unsupported |
+| DMZ | IPv4 host status and configuration | No DMZ host API established | Unsupported |
+| DNS | Host records and upstream configuration | Upstream IPv4 resolvers | Host records and upstream resolver management |
 
-Add a BlueberryProxy provider using the proxy's reachable API URL, normally `http://LAN-IP:8055`. Select the gateway and that proxy, then import inventory or scan the advertised CIDRs. Imported IP/MAC pairs retain inventory-source evidence, and UScan publishes discovery events. Routed CIDRs support unicast scanning when reachable. mDNS, WSD and ONVIF multicast remain subject to local interface and router multicast boundaries. If the router does not advertise its subnet, enter explicit CIDRs in provider settings.
+Router access controls do not physically remove cables or Wi-Fi associations. Eero pause blocks internet access and may leave local LAN communication available. G3100 DMZ and DHCP changes can affect connectivity, and Eero DNS changes can restart the gateway. Notices appear with the corresponding review. IPv6 DNS, IPv6 DMZ, DHCP reservation CRUD, port ranges and forwarding schedules are not implemented by these adapters. BlueberryProxy upstream API changes affect the running resolver; configure app options for restart defaults.
 
-Copy the app API token using the Ingress panel's Home Assistant connection token section. Install the integration from `dist/repo/blueberry_quantum`, add BlueberryQuantum in Home Assistant with the app URL and token, then add a `custom:blueberry-quantum-card`. The card selects providers, manages provider configuration, inspects the SPA, reviews and applies DNS/NAT plans, and imports or scans inventory through BlueberryProxy. Administrative WebSocket requests require an HA administrator. Provider device, DNS and forwarding counts are exposed as sensors. Those counts describe inventory, not device control entities.
+The G3100 adapter reads form-field identifiers from authenticated CGI responses and gates writes using inspected SPA markers. Its public asset collector successfully read 91 assets from the requested gateway, including the forms used by these features. Eero request contracts were extracted from the supplied Android app. Adapter behavior is validated with simulated gateways and APIs. Live authenticated control remains unvalidated without gateway and Eero account access.
+
+Copy the app token through Ingress and add the BlueberryQuantum integration using the app URL and token. Add a `custom:blueberry-quantum-card`. Administrative actions pass through HA's authenticated WebSocket API. Inventory count sensors are discovered from readable collection descriptors, including collections supplied by extensions. A removed or unavailable capability becomes unavailable rather than reporting a false zero.
+
+## Adding providers and settings
+
+Built-in adapters live in `backend/blueberry_quantum/drivers`. Eero code stays in `BlueberryEero/provider.py`. `providers.py` retains compatibility exports and loads installed Python entry points in the `blueberry_quantum.providers` group. A provider extends `Provider` and declares a unique `kind`, a `configuration_schema()`, `snapshot()`, `resource_specs(snapshot)` and `apply(resource, operation, values)`. Setup actions use `actions(snapshot)` and `invoke(action, values)`. Installed entry points and external providers need no frontend changes. Failed optional plugins do not prevent other providers from starting.
+
+The API's `GET /api/providers` returns provider instances and definitions. Each snapshot includes resource descriptors with `id`, `title`, `schema`, `operations`, `value`, `read` and `write`. Collection descriptors also provide `columns` and optional `allow_create`. Per-operation input schemas can be supplied as `operation_schemas`. Unavailable features include a reason. The same schema drives server validation and both frontend forms.
+
+Schemas support bounded objects, strings, integers, numbers, booleans and arrays, including nested objects, required properties, defaults, enums, constants, minimum/maximum values and array/text length limits. Formats include IP, IPv4, IPv4 network, URL and DNS hostname. `writeOnly` marks secrets; `readOnly` marks display-only properties. `enumNames` supplies choice labels. `x-hidden` hides identity fields and `x-immutable` prevents renaming existing record keys. Unknown fields and unadvertised operations are rejected. This is a documented schema subset, not a complete JSON Schema implementation.
+
+An external provider uses kind `http_json` and serves `GET /v1/snapshot` and optionally `GET /v1/schema`. Its schema response contains a `resources` object keyed by resource ID. Resources may extend or replace the standard descriptors and introduce entirely new settings sections. Report read/write capabilities in the snapshot, and enable writes in Quantum. CRUD uses `POST /v1/{resource}` and `DELETE /v1/{resource}/{id}`. Other advertised operations use `POST /v1/{resource}/{operation}`, distinguishing device disconnect from reconnect. Resource and operation IDs use lowercase letters, digits and underscores. Old servers without `/v1/schema` retain the standard capability-based descriptors.
+
+`frontend/quantum-panel.js` is the canonical renderer. Repository generation copies it into the standalone app and integration, and the app Dockerfile copies the canonical source during its build. `scripts/setup-ha-repositories.sh` regenerates distributable apps and integrations. `scripts/deployment-migrate-auto` publishes according to `repo.config.json`.
 
 Standalone execution uses Python 3.11 or later.
 
@@ -21,22 +43,12 @@ python -m pip install -r sre/BlueberryQuantum/backend/requirements.txt
 PYTHONPATH=sre/BlueberryQuantum/backend QUANTUM_DATA=./quantum-data python -m blueberry_quantum.server
 ```
 
-The app listens on port 8060. Direct access requires the token in `quantum-data/api-token`. Ingress bootstrap accepts only the HA Ingress proxy TCP peer `172.30.32.2`; it ignores forwarded IP headers. If your installation uses a different proxy source address, use the API token directly. The browser keeps the token in memory. Do not publish the app port on the Internet.
+The app listens on port 8060. Direct access requires the token from its private data directory. Ingress bootstrap accepts only the HA Ingress proxy TCP peer `172.30.32.2` and ignores forwarded-address headers. The browser keeps the token in memory.
 
-A separate read-only collector downloads only same-origin public JavaScript assets, does not execute JavaScript and does not sign in.
+The read-only collector does not sign in or execute downloaded JavaScript.
 
 ```sh
 PYTHONPATH=sre/BlueberryQuantum/backend python -m blueberry_quantum.collect --url https://192.168.1.1 --self-signed --output /tmp/quantum-spa-report.json
 ```
 
-External providers use kind `http_json` and implement `GET /v1/snapshot`, `POST /v1/dns`, `DELETE /v1/dns/{id}`, `POST /v1/forwards` and `DELETE /v1/forwards/{id}`. A snapshot supplies `status`, `devices`, `networks`, `dns`, `forwards` and `capabilities`. Capabilities include `dns_read`, `dns_write`, `forwards_read`, `forwards_write` and `devices`. Devices carry observed `ip`, optional `mac` and `hostname`. Networks are explicit IPv4 CIDRs. DNS values use `name` and `ip`. Forward values use `name`, `private_ip`, `protocol`, `external_port` and `internal_port`. An optional bearer token is stored privately. Multiple external providers may be registered at runtime without changing the proxy or Quantum code.
-
-Protocol research references include the gateway's public SPA and the [quantum_gateway project](https://github.com/cisasteelersfan/quantum_gateway). This adapter uses original code based on observed wire formats.
-
-## Eero and per-provider DNS
-
-The HA card now shows DNS host records for the selected provider, with add, edit and delete controls. Each change is reviewed against that provider's revision. Switching providers clears the review, and backend reconfiguration or Eero network selection invalidates pending plans. Unsupported and read-only capabilities disable the corresponding controls.
-
-Eero is available as kind `eero`, with email/phone verification, saved-token authentication and an account-network selector in both the app and HA card. It supplies connected client inventory, network CIDRs where advertised, forwarding controls and a separate upstream DNS form. Eero upstream DNS changes can reboot the gateway and preserve the existing IPv6 DNS configuration. See [BlueberryEero](https://git.crit.rip/BlueberryFaygo/BlueberryFaygo/src/branch/main/sre/BlueberryQuantum/BlueberryEero/README.md) for the extracted contracts and current validation limits.
-
-Publication is configured in the workspace's `repo.config.json` and handled by `scripts/deployment-migrate-auto`. The correct app-store repository is the published `BlueberryFaygo/apps` repository. See [deployment instructions](https://git.crit.rip/BlueberryFaygo/BlueberryFaygo/src/branch/main/scripts/DEPLOYMENT.md) for token requirements and mirror configuration.
+See the [Eero research notes](https://git.crit.rip/BlueberryFaygo/BlueberryFaygo/src/branch/main/sre/BlueberryQuantum/BlueberryEero/README.md) and [deployment instructions](https://git.crit.rip/BlueberryFaygo/BlueberryFaygo/src/branch/main/scripts/DEPLOYMENT.md). Protocol references include the router's public SPA and the [quantum_gateway project](https://github.com/cisasteelersfan/quantum_gateway). Adapters use original code based on observed wire formats.

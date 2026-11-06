@@ -81,11 +81,12 @@ async def inspect_gateway(fetch_text, base, max_assets=128):
     analysis['profiles'] = {
         'forwardrule': bool(re.search(r'to:"forwardrule"',material) and re.search(r'tcp:1,udp:2,gre:4,esp:5,ah:6,both:8',material)),
         'dns': all(marker in material for marker in ('dnsmasq_reload','dns_name','dns_ip','apply_abstract.cgi','o[e.i]=e.v')),
+        'upstream_dns': all(marker in material for marker in ('wan_dns_enable','dns_auto_enable','wan_static_dns','ui_verizon_broad_settings')),
         'upnp': all(marker in material for marker in ('ui_upnp','upnp_enable')),
         'lighting': all(marker in material for marker in ('router_led_dim','router_led_timer')),
         'dmz': all(marker in material for marker in ('ui_firewall','firewall_dmz_enable','firewall_dmz_ip')),
         'dhcp': all(marker in material for marker in ('dhcp_start_ip','dhcp_end_ip','dhcp_lease_time','dhcp_enable0')),
-        'device_access': all(marker in material for marker in ('ui_block_dev','ui_remove_block_dev','block_mac_')), 
+        'device_access': all(marker in material for marker in ('ui_block_dev','ui_remove_block_dev','block_mac_')),
     }
     analysis.update(assets=assets, origin=base, asset_limit=max_assets,
                     fingerprint=hashlib.sha256(json.dumps(assets, sort_keys=True).encode()).hexdigest())

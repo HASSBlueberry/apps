@@ -32,4 +32,7 @@ def register_provider(driver):
 
 from importlib.metadata import entry_points
 for entry in entry_points(group='blueberry_quantum.providers'):
-    register_provider(entry.load())
+    try:register_provider(entry.load())
+    except Exception:
+        import logging
+        logging.getLogger(__name__).error('Could not load provider plugin %s',entry.name)

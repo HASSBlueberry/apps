@@ -87,11 +87,13 @@ class Provider:
         return config_schema()
     @classmethod
     def definition(cls):
-        return {'kind':cls.kind,'title':getattr(cls,'title',cls.kind.replace('_',' ').title()),'configuration':cls.configuration_schema()}
+        return {'kind':cls.kind,'title':getattr(cls,'title',cls.kind.replace('_',' ').title()),'configuration':cls.configuration_schema(),'roles':getattr(cls,'roles',[])}
     @classmethod
     def validate_configuration(cls,config):return config
     def resource_specs(self,snapshot):return {}
     def actions(self,snapshot):return []
+    async def start_discovery(self,networks):raise Unsupported('Provider does not support discovery jobs')
+    async def import_inventory(self,networks,devices,source):raise Unsupported('Provider does not support inventory imports')
     async def invoke(self,action,values):raise Unsupported('Provider action is not supported')
     async def snapshot(self): raise Unsupported('Provider snapshot is not implemented')
     async def inspect(self): return await inspect_gateway(self.text, self.url)

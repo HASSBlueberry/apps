@@ -9,7 +9,7 @@ import re
 
 def field(title,type='string',**kwargs): return {'type':type,'title':title,**kwargs}
 def obj(properties,required=()): return {'type':'object','properties':properties,'required':list(required),'additionalProperties':False}
-ID=field('ID',maxLength=128)
+ID=field('ID',maxLength=128,**{'x-hidden':True})
 ENABLED=field('Enabled','boolean')
 IP=field('IPv4 address',format='ipv4')
 COMMON_CONFIG={
@@ -18,24 +18,24 @@ COMMON_CONFIG={
  'write_enabled':field('Enable supported writes','boolean',default=False),
  'networks':field('LAN CIDRs','array',items=field('CIDR',format='ipv4-network'),default=[],maxItems=32),
 }
-DNS=obj({'name':field('DNS name',format='hostname'),'ip':field('Address',format='ip')},['name','ip'])
+DNS=obj({'id':ID,'name':field('DNS name',format='hostname'),'ip':field('Address',format='ip')},['name','ip'])
 FORWARD=obj({'id':ID,'name':field('Rule name',default='Blueberry rule',maxLength=80),
- 'private_ip':IP,'protocol':field('Protocol',enum=['tcp','udp','both'],default='tcp'),
+ 'private_ip':field('Device address',format='ipv4'),'protocol':field('Protocol',enum=['tcp','udp','both'],default='tcp'),
  'external_port':field('Gateway port','integer',minimum=1,maximum=65535),
  'internal_port':field('Device port','integer',minimum=1,maximum=65535),'enabled':field('Enabled','boolean',default=True)},['private_ip','protocol','external_port','internal_port'])
 UPSTREAM=obj({'mode':field('Mode',enum=['automatic','custom']),'ips':field('IPv4 DNS servers','array',items=IP,maxItems=2)},['mode','ips'])
-DHCP=obj({'enabled':ENABLED,'start_ip':IP,'end_ip':IP,'lease_minutes':field('Lease time in minutes','integer',minimum=1,maximum=10080)},['enabled','start_ip','end_ip','lease_minutes'])
-DMZ=obj({'enabled':ENABLED,'ip':IP},['enabled'])
+DHCP=obj({'enabled':ENABLED,'start_ip':field('Lease range start',format='ipv4'),'end_ip':field('Lease range end',format='ipv4'),'lease_minutes':field('Lease time in minutes','integer',minimum=1,maximum=10080)},['enabled','start_ip','end_ip','lease_minutes'])
+DMZ=obj({'enabled':ENABLED,'ip':field('DMZ host address',format='ipv4')},['enabled'])
 LIGHTING=obj({'id':ID,'enabled':ENABLED},['enabled'])
 CATALOG={
- 'devices':{'title':'Connected devices','collection':True,'schema':obj({'id':ID},['id']),'columns':['hostname','ip','mac','connected','blocked'],
+ 'devices':{'title':'Connected devices','collection':True,'schema':obj({'id':ID,'hostname':field('Device name',readOnly=True),'ip':field('Address',readOnly=True),'mac':field('MAC address',readOnly=True),'connected':field('Connection','boolean',readOnly=True,trueLabel='Connected',falseLabel='Unconfirmed'),'blocked':field('Access','boolean',readOnly=True,trueLabel='Blocked',falseLabel='Allowed')},['id']),'columns':['hostname','ip','mac','connected','blocked'],
             'operations':{'disconnect':'Block network access','reconnect':'Restore network access'},'notice':'Blocking access does not physically disconnect a wired cable or Wi-Fi association.'},
  'upnp':{'title':'UPnP','schema':obj({'enabled':ENABLED},['enabled'])},
  'lighting':{'title':'Router lighting','schema':LIGHTING},
- 'forwards':{'title':'Port forwarding','collection':True,'schema':FORWARD,'columns':['name','private_ip','protocol','external_port','internal_port','enabled'],'operations':{'upsert':'Save rule','delete':'Delete rule'}},
+ 'forwards':{'title':'Port forwarding','collection':True,'allow_create':True,'schema':FORWARD,'columns':['name','private_ip','protocol','external_port','internal_port','enabled'],'operations':{'upsert':'Save rule','delete':'Delete rule'}},
  'dhcp':{'title':'DHCP','schema':DHCP,'notice':'DHCP changes can interrupt clients or change their addresses.'},
  'dmz':{'title':'DMZ','schema':DMZ,'notice':'Enabling DMZ exposes the selected device to unsolicited inbound traffic.'},
- 'dns':{'title':'DNS host records','collection':True,'schema':DNS,'columns':['name','ip'],'operations':{'upsert':'Save record','delete':'Delete record'}},
+ 'dns':{'title':'DNS host records','collection':True,'allow_create':True,'schema':DNS,'columns':['name','ip'],'operations':{'upsert':'Save record','delete':'Delete record'}},
  'dns_settings':{'title':'Upstream DNS','schema':UPSTREAM,'notice':'Changing upstream DNS may reboot the gateway or interrupt connected clients.'},
 }
 
@@ -50,9 +50,11 @@ def validate(value,schema,partial=False,depth=0):
         if unknown: raise ValueError('Unknown settings fields '+', '.join(sorted(unknown)))
         result={}
         for key,prop in props.items():
-            if key in value: result[key]=validate(value[key],prop,depth=depth+1)
+            if key in value:
+                if prop.get('readOnly'):raise ValueError('Setting is read-only '+key)
+                result[key]=validate(value[key],prop,depth=depth+1)
             elif not partial and 'default' in prop: result[key]=deepcopy(prop['default'])
-            elif not partial and key in schema.get('required',[]): raise ValueError('Required setting '+key)
+            elif not partial and key in schema.get('required',[]) and not prop.get('readOnly'): raise ValueError('Required setting '+key)
         return result
     if type=='boolean':
         if not isinstance(value,bool): raise ValueError('Expected boolean for '+schema.get('title','setting'))
@@ -79,6 +81,7 @@ def validate(value,schema,partial=False,depth=0):
     return value
 
 def public_values(value,schema):
+    if isinstance(value,list):return [public_values(item,schema.get('items',{})) for item in value]
     if not isinstance(value,dict):return value
     return {key:public_values(item,schema.get('properties',{}).get(key,{})) for key,item in value.items() if not schema.get('properties',{}).get(key,{}).get('writeOnly')}
 
@@ -87,12 +90,14 @@ def interfaces(provider,snapshot):
     overrides=provider.resource_specs(snapshot) if hasattr(provider,'resource_specs') else {}
     result=[]
     for rid in dict.fromkeys([*CATALOG,*overrides]):
+        if not re.fullmatch('[a-z][a-z0-9_]{0,63}',rid):raise ValueError('Invalid resource ID in provider schema')
         item=deepcopy(CATALOG.get(rid,{'title':rid,'schema':obj({})}))
         item.update(deepcopy(overrides.get(rid,{})))
-        read=bool(caps.get(rid+'_read',caps.get('devices',False) if rid=='devices' else False))
-        write=bool(caps.get(rid+'_write',False))
-        item.update(id=rid,read=read,write=write,value=snapshot.get(rid,[] if item.get('collection') else {}))
+        read=bool(caps.get(rid+'_read',caps.get('devices',False) if rid=='devices' else item.get('read',False)))
+        write=bool(caps.get(rid+'_write',item.get('write',False)))
+        item.update(id=rid,read=read,write=write,value=public_values(snapshot.get(rid,[] if item.get('collection') else {}),{'type':'array','items':item['schema']} if item.get('collection') else item['schema']))
         item.setdefault('operations',{'upsert':'Save settings'})
+        if not isinstance(item['operations'],dict) or any(not re.fullmatch('[a-z][a-z0-9_]{0,63}',key) for key in item['operations']):raise ValueError('Invalid provider operations')
         if not read:item['reason']=snapshot.get('errors',{}).get(rid) or item.get('reason') or 'This provider or firmware does not expose this feature.'
         elif not write:item['reason']=item.get('reason') or 'Read-only. Enable supported writes in provider settings.'
         result.append(item)

@@ -47,6 +47,7 @@ class G3100Provider(Provider):
         return self.report
     async def snapshot(self):
         if not self.logged_in: await self.login()
+        self.connection_cfg = {}
         status_text = await self.text('/cgi/cgi_status.js')
         rod = {row[0]: row[1] for row in call_literals(status_text, 'addROD') if len(row) == 2}
         cfg = {row[0]: {'field':row[1], 'value':row[2]} for row in call_literals(status_text, 'addCfg') if len(row) >= 3}
@@ -67,6 +68,9 @@ class G3100Provider(Provider):
             text = await self.text('/cgi/cgi_firewall_port_forward.js')
             values = {row[0]: row[1] for row in call_literals(text, 'addROD') if len(row) == 2}
             raw = values.get('portforwardings', {})
+            raw_rules=values.get('portrules',{})
+            rule_rows=raw_rules.get('portrules',[]) if isinstance(raw_rules,dict) else []
+            self.port_rules={str(row.get('id')):row for row in rule_rows if isinstance(row,dict)}
             forwards = [row for row in raw.get('portforwardings', []) if isinstance(row, dict)] if isinstance(raw, dict) else []
             for row in forwards: row['id'] = str(row.get('id', ''))
         except ProviderError as error: errors['forwards'] = str(error)
@@ -93,7 +97,8 @@ class G3100Provider(Provider):
         networks = list(self.config.get('networks', []))
         try:
             text = await self.text('/cgi/cgi_net_connections.js')
-            network_cfg = {row[0]:row[2] for row in call_literals(text,'addCfg') if len(row)>=3}
+            self.connection_cfg = {row[0]:{'field':row[1],'value':row[2]} for row in call_literals(text,'addCfg') if len(row)>=3}
+            network_cfg = {key:row['value'] for key,row in self.connection_cfg.items()}
             if network_cfg.get('lan_ip') and network_cfg.get('lan_mask0'):
                 network = str(ipaddress.IPv4Network(network_cfg['lan_ip']+'/'+network_cfg['lan_mask0'],strict=False))
                 if network not in networks: networks.append(network)
@@ -109,12 +114,15 @@ class G3100Provider(Provider):
         return result
 
     def resource_specs(self,snapshot):
-        from ..schema import obj,field,ENABLED
-        return {'lighting':{'schema':obj({'enabled':ENABLED,'brightness':field('Brightness percent','integer',enum=[0,50,100]),'timeout':field('LED timeout','integer',minimum=0,maximum=86400)},['enabled'])},
-                'dhcp':{'title':'LAN DHCP'}}
+        from ..schema import obj,field,ENABLED,DHCP,UPSTREAM
+        from copy import deepcopy
+        dhcp=deepcopy(DHCP);dhcp['properties'].update(subnet_ip=field('LAN subnet address',format='ipv4',readOnly=True),subnet_mask=field('LAN subnet mask',format='ipv4',readOnly=True))
+        dns=deepcopy(UPSTREAM);dns['properties']['mode']['enum'].append('disabled')
+        return {'lighting':{'schema':obj({'enabled':ENABLED,'brightness':field('Brightness percent','integer',enum=[0,50,100]),'timeout':field('LED timeout in minutes','integer',enum=list(dict.fromkeys([0,1,5,10,15,20,30]+([snapshot['lighting']['timeout']] if snapshot.get('lighting',{}).get('timeout') is not None else []))))},['enabled'])},
+                'dhcp':{'title':'LAN DHCP','schema':dhcp},'dns_settings':{'schema':dns}}
 
     async def gateway_settings(self,result):
-        self.gateway_cfg={}
+        self.gateway_cfg=dict(self.connection_cfg)
         names={'upnp':'upnp','lighting':'router_led','dhcp':'ip_distribution','dmz':'dmz','devices':'firewall_access_control'}
         for resource,cgi in names.items():
             try:
@@ -126,8 +134,8 @@ class G3100Provider(Provider):
                 result['errors'][resource]=str(error)
         cfg=self.gateway_cfg
         value=lambda key,default=None:cfg.get(key,{}).get('value',default)
-        specs={'upnp':['upnp_enable'],'lighting':['router_led_dim'],'dhcp':['dhcp_enable0','dhcp_start_ip','dhcp_end_ip','dhcp_lease_time'],'dmz':['firewall_dmz_enable','firewall_dmz_ip']}
-        markers={'upnp':'upnp','lighting':'lighting','dhcp':'dhcp','dmz':'dmz','devices':'device_access'}
+        specs={'upnp':['upnp_enable'],'lighting':['router_led_dim'],'dhcp':['dhcp_enable0','dhcp_start_ip','dhcp_end_ip','dhcp_lease_time'],'dmz':['firewall_dmz_enable','firewall_dmz_ip'],'dns_settings':['wan_dns_enable','dns_auto_enable','wan_static_dns']}
+        markers={'upnp':'upnp','lighting':'lighting','dhcp':'dhcp','dmz':'dmz','devices':'device_access','dns_settings':'upstream_dns'}
         profiles=(self.report or {}).get('profiles',{})
         for resource,fields in specs.items():
             readable=all(key in cfg for key in fields) and resource not in result['errors']
@@ -141,6 +149,10 @@ class G3100Provider(Provider):
         if result['capabilities']['dhcp_read']:
             result['dhcp']={'enabled':str(value('dhcp_enable0'))=='1','start_ip':value('dhcp_start_ip'),'end_ip':value('dhcp_end_ip'),'lease_minutes':int(value('dhcp_lease_time'))}
             result['dhcp'].update(subnet_ip=value('lan_ip'),subnet_mask=value('lan_mask',value('lan_mask0')))
+        if result['capabilities']['dns_settings_read']:
+            mode='disabled' if str(value('wan_dns_enable'))!='1' else 'automatic' if str(value('dns_auto_enable'))=='1' else 'custom'
+            ips=[ip for ip in str(value('wan_static_dns','')).split('|') if ip]
+            result['dns_settings']={'mode':mode,'ips':ips}
         if result['capabilities']['dmz_read']:result['dmz']={'enabled':str(value('firewall_dmz_enable'))=='1','ip':value('firewall_dmz_ip')}
         blocked={str(row['value']).lower():key for key,row in cfg.items() if key.startswith('block_mac_') and row['value']}
         slots=[key for key in cfg if key.startswith('block_mac_')]
@@ -153,7 +165,14 @@ class G3100Provider(Provider):
         for row in result['forwards']:
             row['enabled']=str(row.get('enable','1'))=='1'
             row['private_ip']=row.get('privateIP',row.get('private_ip'))
-            row['internal_port']=row.get('forward_port',row.get('internal_port'))
+            rule=self.port_rules.get(str(row.get('port_rule_id')),{})
+            ports=rule.get('ports',[])
+            port=ports[0] if ports else {}
+            external=port.get('dest_port',row.get('external_port'))
+            row['external_port']=int(external) if str(external).isdigit() else external
+            row['protocol']={1:'tcp',2:'udp',8:'both'}.get(int(port.get('type',0)),row.get('protocol'))
+            internal=row.get('forward_port',row.get('internal_port'))
+            row['internal_port']=row['external_port'] if str(internal)=='0' else int(internal) if str(internal).isdigit() else internal
 
     async def submit_fields(self,changes,command=None,parameter=None):
         token=(await self.json('/loginStatus.cgi')).get('token')
@@ -170,6 +189,12 @@ class G3100Provider(Provider):
 
     async def apply_gateway(self,resource,operation,values,snapshot):
         if not snapshot['capabilities'].get(resource+'_write'):raise Unsupported('Inspect this firmware and enable supported writes first')
+        if resource=='dns_settings':
+            mode=values['mode'];ips=values.get('ips',[])
+            if mode=='custom':
+                from ..base import dns_settings_value
+                ips=dns_settings_value(values)['ips']
+            return await self.submit_fields({'wan_dns_enable':0 if mode=='disabled' else 1,'dns_auto_enable':1 if mode=='automatic' else 0,'wan_static_dns':'|'.join(ips) if mode=='custom' else ''},'ui_verizon_broad_settings')
         if resource=='upnp':return await self.submit_fields({'upnp_enable':int(values['enabled'])},'ui_upnp')
         if resource=='lighting':
             changes={'router_led_dim':'off' if not values['enabled'] else {50:'dim',100:'on'}.get(values.get('brightness'),'on')}
@@ -188,7 +213,8 @@ class G3100Provider(Provider):
         if resource=='devices':
             row=next((row for row in snapshot['devices'] if row['id']==values['id']),None)
             if row is None or not row.get('mac'):raise ProviderError('Choose an observed device MAC address')
-            mac=str(row['mac']).upper()
+            mac=str(row['mac']).upper().replace('-',':')
+            if not re.fullmatch(r'(?:[0-9A-F]{2}:){5}[0-9A-F]{2}',mac):raise ProviderError('Observed MAC address is invalid')
             slots={key.rsplit('_',1)[-1]:item['value'] for key,item in self.gateway_cfg.items() if key.startswith('block_mac_')}
             matching=next((slot for slot,value in slots.items() if str(value).upper()==mac),None)
             if operation=='reconnect':
@@ -202,7 +228,7 @@ class G3100Provider(Provider):
         raise Unsupported('Unknown gateway feature')
     async def apply(self, resource, operation, values):
         snapshot = await self.snapshot()
-        if resource in ('upnp','lighting','dhcp','dmz','devices'):
+        if resource in ('upnp','lighting','dhcp','dmz','devices','dns_settings'):
             return await self.apply_gateway(resource,operation,values,snapshot)
         if resource == 'dns':
             return await self.apply_dns(operation, values, snapshot)
@@ -237,7 +263,7 @@ class G3100Provider(Provider):
             value = dns_value(values)
             if ipaddress.ip_address(value['ip']).version != 4:
                 raise Unsupported('This write profile supports IPv4 DNS entries')
-            existing = next((row for row in snapshot['dns'] if row['name'] == value['name']), None)
+            existing = next((row for row in snapshot['dns'] if (row['id']==str(values['id']) if values.get('id') else row['name']==value['name'])), None)
             index = existing['id'] if existing else next((key[8:] for key,row in self.dns_cfg.items() if key.startswith('dns_name') and not row['value']), None)
             if index is None: raise ProviderError('No unused DNS slot was advertised by the gateway')
             name, address = value['name'], value['ip']

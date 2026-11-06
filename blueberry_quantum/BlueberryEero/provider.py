@@ -16,7 +16,9 @@ class EeroProvider(Provider):
     @classmethod
     def configuration_schema(cls):
         from blueberry_quantum.schema import config_schema,field
-        return config_schema({'token':field('Existing session token',writeOnly=True),'network_id':field('Network ID')},{'url':'https://api-user.e2ro.com'})
+        schema=config_schema({'token':field('Existing session token',writeOnly=True),'network_id':field('Network ID')},{'url':'https://api-user.e2ro.com'})
+        schema['properties']['verify_tls']['const']=True
+        return schema
     @classmethod
     def validate_configuration(cls,config):
         if config['url'] not in cls.allowed_origins or config.get('verify_tls') is False:raise ProviderError('Eero requires the official HTTPS API with certificate verification')
@@ -24,7 +26,7 @@ class EeroProvider(Provider):
     def resource_specs(self,snapshot):
         from blueberry_quantum.schema import obj,field,IP,ID,ENABLED
         return {'dmz':{'reason':'The inspected Eero API does not expose a DMZ host setting.'},'devices':{'operations':{'disconnect':'Pause internet access','reconnect':'Restore internet access'},'notice':'Pausing blocks internet access. Wi-Fi associations and local LAN access may remain.'},'lighting':{'collection':True,'columns':['name','enabled'],'schema':obj({'id':ID,'enabled':ENABLED},['id','enabled'])},
-                'dhcp':{'schema':obj({'mode':field('Mode',enum=['automatic','custom']),'subnet_ip':IP,'subnet_mask':IP,'start_ip':IP,'end_ip':IP},['mode'])}}
+                'dhcp':{'schema':obj({'mode':field('Mode',enum=['automatic','custom']),'subnet_ip':field('Subnet address',format='ipv4'),'subnet_mask':field('Subnet mask',format='ipv4'),'start_ip':field('Lease range start',format='ipv4'),'end_ip':field('Lease range end',format='ipv4')},['mode'])}}
     def actions(self,snapshot):
         from blueberry_quantum.schema import obj,field
         return [{'id':'login','title':'Send Eero verification code','schema':obj({'login':field('Email or phone')},['login'])},
@@ -119,7 +121,7 @@ class EeroProvider(Provider):
         result['status'].update(name=network.get('name',selected['name']),network_id=selected['id'],connection=network.get('status'),gateway_ip=network.get('gateway_ip'),wan_ip=network.get('wan_ip'))
         if isinstance(network.get('dns'),dict):
             dns=network['dns'];custom=dns.get('custom') or {};parent=dns.get('parent') or {}
-            result['dns_settings']={'mode':dns.get('mode'),'custom_ips':custom.get('ips',[]),'parent_ips':parent.get('ips',[]),'caching':dns.get('caching')}
+            result['dns_settings']={'mode':dns.get('mode'),'custom_ips':custom.get('ips',[]),'ips':custom.get('ips',[]),'parent_ips':parent.get('ips',[]),'caching':dns.get('caching')}
             capabilities['dns_settings_read']=True
             # DnsViewModel clones the current network and updates DNS through resources.settings.
             capabilities['dns_settings_write']=bool(self.config.get('write_enabled') and resources.get('settings'))

@@ -10,7 +10,7 @@ import ssl
 import time
 from aiohttp import ClientSession, CookieJar, TCPConnector, web
 from .providers import DRIVERS, ProviderError
-from .schema import validate,public_values,interfaces,obj,ID
+from .schema import validate,public_values,interfaces,obj,ID,field
 
 PUBLIC = Path(__file__).parent / 'public'
 
@@ -32,7 +32,13 @@ class Manager:
         with os.fdopen(fd,'w') as handle: json.dump(self.configs,handle)
         os.replace(temporary,self.path)
     def public(self):
-        return [public_values({key:value for key,value in row.items() if key not in ('password','token')},DRIVERS[row['kind']].configuration_schema()) | {'id':pid} for pid,row in self.configs.items()]
+        result=[]
+        for pid,row in self.configs.items():
+            driver=DRIVERS.get(row['kind'])
+            if driver is None:
+                result.append({key:row[key] for key in ('kind','name','url') if key in row} | {'id':pid,'unavailable':True})
+            else:result.append(public_values({key:value for key,value in row.items() if key not in ('password','token')},driver.configuration_schema()) | {'id':pid})
+        return result
     def definitions(self):return {kind:driver.definition() for kind,driver in DRIVERS.items()}
     async def configure(self,values):
         pid=values.get('id') or secrets.token_hex(8)
@@ -66,6 +72,7 @@ class Manager:
         if pid not in self.configs: raise web.HTTPNotFound()
         if pid not in self.drivers:
             config=self.configs[pid]
+            if config['kind'] not in DRIVERS:raise ProviderError('Provider plugin is not installed')
             session=ClientSession(cookie_jar=CookieJar(unsafe=True),connector=TCPConnector(ssl=False if config.get('verify_tls') is False else ssl.create_default_context()))
             self.sessions[pid]=session
             self.drivers[pid]=DRIVERS[config['kind']](session,config)
@@ -76,6 +83,10 @@ class Manager:
         result['resources']=interfaces(driver,result)
         result.pop('_schema',None)
         result['actions']=driver.actions(result) if hasattr(driver,'actions') else []
+        discovery=[(id,row) for id,row in self.configs.items() if 'discovery' in getattr(DRIVERS.get(row['kind']),'roles',[])]
+        if discovery and result.get('networks'):
+            schema=obj({'proxy_id':field('Discovery provider',enum=[id for id,row in discovery],enumNames=[row.get('name',row['kind']) for id,row in discovery])},['proxy_id'])
+            result['actions'] += [{'id':action,'title':title,'transport':action,'schema':schema} for action,title in [('scan','Scan provider networks'),('sync','Import device inventory')]]
         result['revision']=self.resource_revision(pid,result)
         return result
     def resource_revision(self,pid,snapshot,resource=None,values=None):
@@ -134,6 +145,7 @@ async def create_app(directory='/data/quantum'):
                 return web.json_response(await manager.snapshot(pid))
             if action=='delete':
                 if pid not in manager.configs: raise web.HTTPNotFound()
+                manager.invalidate_plans(pid)
                 await manager.disconnect(pid);del manager.configs[pid];manager.save()
                 return web.json_response({'deleted':True})
             if action in ('eero_login','eero_verify','eero_select'):
@@ -162,6 +174,10 @@ async def create_app(directory='/data/quantum'):
                 schema=descriptor.get('operation_schemas',{}).get(operation,obj({'id':ID},['id']) if operation in ('delete','disconnect','reconnect') else descriptor['schema'])
                 payload=validate(values['values'],schema)
                 if descriptor.get('collection') and payload.get('id') and not any(str(row.get('id'))==str(payload['id']) for row in descriptor['value']):raise ProviderError('Resource no longer exists')
+                if payload.get('id') and descriptor.get('collection'):
+                    row=next(row for row in descriptor['value'] if str(row.get('id'))==str(payload['id']))
+                    for key,prop in schema.get('properties',{}).items():
+                        if prop.get('x-immutable') and key in payload and payload[key]!=row.get(key):raise ProviderError('Setting cannot be changed in place '+key)
                 now=time.time();manager.plans={key:row for key,row in manager.plans.items() if row['expires']>now}
                 if len(manager.plans)>=128:raise ProviderError('Too many pending plans')
                 plan={'id':secrets.token_urlsafe(24),'provider':pid,'resource':resource,'operation':operation,'values':payload,'revision':manager.resource_revision(pid,snapshot,resource,payload),'expires':now+300}
@@ -177,13 +193,13 @@ async def create_app(directory='/data/quantum'):
                 return web.json_response({'submitted':True,'snapshot':await manager.snapshot(pid)})
             if action in ('scan','sync'):
                 values=await request.json();target=await manager.driver(values['proxy_id'])
-                if target.kind!='blueberry_proxy': raise ProviderError('Select a BlueberryProxy provider')
+                if 'discovery' not in getattr(target,'roles',[]): raise ProviderError('Select a discovery provider')
                 snapshot=await manager.snapshot(pid)
                 networks=snapshot.get('networks',[])
                 if not networks: raise ProviderError('Router did not advertise CIDRs. Set explicit networks in provider settings')
                 if action=='sync':
-                    return web.json_response(await target.json('/uscan/devices','POST',json={'source':'quantum-'+pid,'cidrs':networks,'devices':snapshot.get('devices',[])}))
-                return web.json_response(await target.json('/uscan/jobs','POST',json={'parameters':{'cidrs':networks},'scanner_ids':['arp','mdns','wsd','onvif','avahi']}))
+                    return web.json_response(await target.import_inventory(networks,snapshot.get('devices',[]),'quantum-'+pid))
+                return web.json_response(await target.start_discovery(networks))
             raise web.HTTPNotFound()
     async def index(request): return web.FileResponse(PUBLIC/'index.html',headers={'Content-Security-Policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"})
     async def shutdown(app): await manager.close()

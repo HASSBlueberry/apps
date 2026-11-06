@@ -1,5 +1,5 @@
 name: BlueberryQuantum
-version: "0.2.0"
+version: "0.3.0"
 slug: blueberry_quantum
 description: Local multi-provider gateway, DNS and port forwarding management
 url: https://git.crit.rip/BlueberryFaygo/BlueberryFaygo
