@@ -1,3 +1,19 @@
+# 0.5.1
+
+Detect the silent `uiautomator` failure caused by a privileged adbd, return adbd to the shell user and retry once before reporting `android_screen_unreadable`, restore non-root adbd after module setup, discover the managed ADB target when selecting a device, connect network ADB targets before waiting for them, and read recovery screens through the same dump helper.
+
+# 0.5.0
+
+Add a persistent managed ADB target, ReDroid-only screenshots and input, Zygisk status, and pinned module setup with architecture and Google services checks. BlueberryDroid supplies the remote SSH tunnel and ingress UI.
+
+# 0.4.1
+
+Add key-protected Android runtime status and a panel check for Android, ADB root, Magisk, Google Play services and MyQ installation.
+
+# 0.4.0
+
+Add optional TLS IMAP and bounded ADB login recovery, visible renewal state, explicit token reveal, and a longer App Check observation window. Native calibration no longer blocks cloud renewal.
+
 # 0.3.0
 
 Add native MyQ UI control with one sign-in inside the official app. Add an

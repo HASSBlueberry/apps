@@ -11,6 +11,11 @@ import uuid
 from aiohttp import ClientError, ClientSession, web
 from .adb import ADBError, AndroidBridge, command, select_device, extract_token
 from .oauth import LoginManager, PhoneLoginError
+from .modules import ModuleSetup
+from .apps import AppInstaller, LIMIT
+import tempfile
+from .adb import TARGET
+from .recovery import LoginRecovery, RecoveryError
 from .native import NativeController, NativeError
 
 
@@ -33,7 +38,8 @@ def migrate_state(value):
     return {'version': 3, 'id': value.get('id') or str(uuid.uuid4()),
             'api_key': value.get('api_key') or secrets.token_urlsafe(32),
             'serial': value.get('serial', ''), 'cache': value.get('cache', {}),
-            'native_doors':value.get('native_doors',[])}
+            'native_doors':value.get('native_doors',[]),
+            **({'managed_adb_target':value['managed_adb_target']} if value.get('managed_adb_target') else {})}
 
 
 class BridgeService:
@@ -53,7 +59,17 @@ class BridgeService:
         self.logins = LoginManager(self.android)
         self.refresh_task=None
         self.last_refresh_attempt=None
+        self.recovery=LoginRecovery(self)
+        self.modules=ModuleSetup(self)
+        self.apps=AppInstaller(self)
+        self.last_recovery_attempt=0
+        self.ui_active_until=0
         self.native=NativeController(self,save)
+
+    def targets(self):
+        targets=list(self.options.get('adb_targets',[]))
+        if self.state.get('managed_adb_target'):targets.append(self.state['managed_adb_target'])
+        return list(dict.fromkeys(targets))
 
     def status(self):
         cache = self.state['cache']
@@ -61,6 +77,10 @@ class BridgeService:
         usable = cache.get('serial') == serial and cache.get('expires_at', 0) > time.time() + 60
         return {'phones': self.devices, 'selected_serial': serial,
                 'app_check_available': bool(usable),
+                'login_recovery':self.recovery.summary(),
+                'login_recovery_enabled':bool(self.options.get('login_recovery_enabled')),
+                'app_check_saved':bool(cache.get('token')),
+                'app_check_expires_at':cache.get('expires_at'),
                 'expires_at': cache.get('expires_at') if usable else None, 'error': self.error,
                 'phone_login':self.logins.summary(),
                 'app_check_refreshing':bool(self.refresh_task and not self.refresh_task.done()),
@@ -69,7 +89,7 @@ class BridgeService:
     async def scan(self):
         async with self.lock:
             try:
-                self.devices = await self.android.discover(self.options.get('adb_targets', []))
+                self.devices = await self.android.discover(self.targets())
                 selected = select_device(self.devices, self.options.get('serial') or self.state['serial'])
                 if selected != self.state['serial']:
                     self.state['serial'] = selected
@@ -88,6 +108,7 @@ class BridgeService:
 
     async def request_app_check_refresh(self,automatic=False):
         login=self.logins.summary()
+        if self.recovery.task and not self.recovery.task.done():return
         if login.get('status')=='waiting':
             return  # Never switch away from Chrome during an active sign-in.
         if self.refresh_task and not self.refresh_task.done():
@@ -97,19 +118,25 @@ class BridgeService:
         self.last_refresh_attempt=time.monotonic()
         async def refresh():
             try:
-                devices=await self.android.discover(self.options.get('adb_targets',[]))
+                devices=await self.android.discover(self.targets())
                 serial=select_device(devices,self.options.get('serial') or self.state['serial'])
                 if self.logins.summary().get('status')=='waiting':return
-                if self.native.lock.locked() or (automatic and self.state.get('native_doors')):return
+                if self.native.lock.locked():return
                 await self.android.open_myq(serial)
-                await asyncio.sleep(2)
-                await self.scan()
+                original=self.state['cache'].get('expires_at',0)
+                for _ in range(20):
+                    await asyncio.sleep(3)
+                    await self.scan()
+                    if self.state['cache'].get('expires_at',0)>max(original,time.time()+300):return
+                if self.options.get('login_recovery_enabled') and time.monotonic()-self.last_recovery_attempt>1800:
+                    self.last_recovery_attempt=time.monotonic()
+                    await self.recovery.start()
             except (ADBError,OSError) as error:
                 self.error=str(error) if isinstance(error,ADBError) else 'adb_unavailable'
         self.refresh_task=asyncio.create_task(refresh())
 
     async def maybe_refresh_app_check(self):
-        if self.state['native_doors']:return  # Native control needs no App Check.
+        if time.monotonic()<self.ui_active_until:return
         if not self.options.get('auto_refresh_app_check',True):return
         selected=self.options.get('serial') or self.state['serial']
         if not any(d['state']=='device' and d['serial']==selected for d in self.devices):return
@@ -157,7 +184,7 @@ class BridgeService:
 
 
 UI_PATHS = {'/', '/status', '/scan', '/select', '/open-myq', '/connection',
-            '/native/inspect','/native/bind','/native/devices','/cancel-cloud-login'}
+            '/native/inspect','/native/bind','/native/devices','/cancel-cloud-login','/recovery/start','/recovery/cancel','/android/status'}
 
 
 def create_app(service):
@@ -177,10 +204,10 @@ def create_app(service):
             response.headers['X-Content-Type-Options'] = 'nosniff'
             response.headers['Referrer-Policy'] = 'no-referrer'
             return response
-        except (ADBError, PhoneLoginError, NativeError) as error:
+        except (ADBError, PhoneLoginError, NativeError, RecoveryError) as error:
             return web.json_response({'error': str(error)}, status=409)
 
-    app = web.Application(middlewares=[protect], client_max_size=16384)
+    app = web.Application(middlewares=[protect], client_max_size=LIMIT+1024*1024)
     async def home(request):
         html = (Path(__file__).parent / 'index.html').read_text().replace('__CSRF__', service.csrf)
         return web.Response(text=html, content_type='text/html')
@@ -228,7 +255,7 @@ def create_app(service):
         # provider remains responsible for validating the signature.
         candidate=extract_token('New AppCheck token is acquired: token = '+token)
         async with service.lock:
-            service.devices=await service.android.discover(service.options.get('adb_targets',[]))
+            service.devices=await service.android.discover(service.targets())
             serial=select_device(service.devices,service.options.get('serial') or service.state['serial'])
             service.state.update(serial=serial,cache={**candidate,'serial':serial})
             save(service.path,service.state)
@@ -237,10 +264,11 @@ def create_app(service):
         await service.request_app_check_refresh()
         return web.json_response({'refresh_requested':True})
     async def start_login(request):
+        if service.recovery.task and not service.recovery.task.done():raise RecoveryError('phone_login_in_progress')
         data=await request.json()
         url=data.get('authorize_url') if isinstance(data,dict) else None
         async with service.lock:
-            service.devices=await service.android.discover(service.options.get('adb_targets',[]))
+            service.devices=await service.android.discover(service.targets())
             serial=select_device(service.devices,service.options.get('serial') or service.state['serial'])
             return web.json_response(await service.logins.start(serial,url))
     async def login_result(request):
@@ -264,12 +292,115 @@ def create_app(service):
     async def cancel_cloud(request):
         await service.logins.close()
         return web.json_response({'cancelled':True})
+    def android_serial():
+        return service.options.get('serial') or service.state['serial']
+    async def android_target(request):
+        data=await request.json();value=data.get('target') if isinstance(data,dict) else None
+        match=TARGET.fullmatch(value) if isinstance(value,str) else None
+        if not match or not 1<=int(match[1])<=65535:raise ADBError('invalid_adb_target')
+        if service.options.get('serial') and service.options['serial']!=value:raise ADBError('clear_pinned_qdb_serial')
+        if service.native.lock.locked():raise ADBError('android_controller_busy')
+        async with service.lock:
+            if service.state.get('serial')!=value:service.state['cache']={}
+            service.state.update(serial=value,managed_adb_target=value)
+            save(service.path,service.state)
+            service.devices=await service.android.discover(service.targets())
+        return web.json_response({'target_saved':True})
+    async def android_screenshot(request):
+        service.ui_active_until=time.monotonic()+120
+        return web.Response(body=await service.android.screenshot(android_serial()),content_type='image/png')
+    async def android_input(request):
+        service.ui_active_until=time.monotonic()+120
+        if service.native.lock.locked():raise ADBError('android_controller_busy')
+        data=await request.json()
+        if not isinstance(data,dict):raise ADBError('invalid_android_action')
+        async with service.native.lock:
+            return web.json_response(await service.android.input_event(android_serial(),data))
+    async def adb_public_key(request):
+        path=service.directory/'adb/adbkey.pub'
+        try:key=path.read_text().split()[0]
+        except (OSError,IndexError):raise ADBError('adb_identity_not_initialized')
+        import re
+        if not re.fullmatch(r'[A-Za-z0-9+/=]{100,4096}',key):raise ADBError('adb_identity_not_initialized')
+        return web.json_response({'public_key':key+' blueberryqdb'})
+    async def android_app_open(request):
+        serial=android_serial()
+        await service.android.ensure_redroid(serial)
+        if service.native.lock.locked():raise ADBError('android_controller_busy')
+        service.ui_active_until=time.monotonic()+120
+        await service.android.open_myq(serial)
+        return web.json_response({'opened':True})
+    async def android_app(request):
+        data=await request.json()
+        if not isinstance(data,dict):raise ADBError('invalid_apk_source')
+        return web.json_response(await service.apps.start(android_serial(),data))
+    async def android_app_upload(request):
+        if service.apps.task and not service.apps.task.done():raise ADBError('apk_install_running')
+        reader=await request.multipart();field=await reader.next()
+        if field is None or field.name!='file':raise ADBError('apk_file_required')
+        fd,path=tempfile.mkstemp(prefix='myq-upload-',suffix='.apk',dir=service.directory)
+        try:
+            with os.fdopen(fd,'wb') as output:
+                size=0
+                while chunk:=await field.read_chunk(65536):
+                    size+=len(chunk)
+                    if size>LIMIT:raise ADBError('apk_download_too_large')
+                    output.write(chunk)
+            return web.json_response(await service.apps.start(android_serial(),{},path))
+        except BaseException:
+            with suppress(OSError):Path(path).unlink()
+            raise
+    async def android_modules(request):
+        if service.logins.summary().get('status') in ('waiting','ready'):raise ADBError('phone_login_in_progress')
+        return web.json_response(await service.modules.start(android_serial()))
+    async def android_status(request):
+        metadata={'module_setup':service.modules.summary(),'myq_install':service.apps.summary(),
+                  'app_check_available':service.status()['app_check_available'],
+                  'app_check_expires_at':service.status()['app_check_expires_at']}
+        try:
+            devices=await service.android.discover(service.targets())
+            serial=select_device(devices,service.options.get('serial') or service.state['serial'])
+            status=await service.android.runtime_status(serial)
+            return web.json_response({**status,'adb_connected':True,**metadata})
+        except ADBError as error:
+            # Setup results must remain readable during the reboot they request.
+            return web.json_response({'boot_completed':False,'adb_connected':False,
+                                      'android_error':str(error),**metadata})
+    async def recovery_start(request):
+        await service.recovery.start()
+        return web.json_response(service.recovery.summary())
+    async def recovery_cancel(request):
+        if service.recovery.task:
+            service.recovery.task.cancel()
+            with suppress(asyncio.CancelledError):await service.recovery.task
+        return web.json_response(service.recovery.summary())
     async def cleanup(app):
+        if service.apps.task:
+            service.apps.task.cancel()
+            with suppress(asyncio.CancelledError):await service.apps.task
+        if service.modules.task:
+            service.modules.task.cancel()
+            with suppress(asyncio.CancelledError):await service.modules.task
+        await recovery_cancel(None)
         await service.logins.close()
         if service.refresh_task:
             service.refresh_task.cancel()
             with suppress(asyncio.CancelledError):await service.refresh_task
     app.on_cleanup.append(cleanup)
+    app.router.add_get('/v1/android/adb-public-key',adb_public_key)
+    app.router.add_post('/v1/android/target',android_target)
+    app.router.add_get('/v1/android/screenshot',android_screenshot)
+    app.router.add_post('/v1/android/input',android_input)
+    app.router.add_post('/v1/android/modules',android_modules)
+    app.router.add_post('/v1/android/myq',android_app)
+    app.router.add_post('/v1/android/myq/open',android_app_open)
+    app.router.add_post('/v1/android/myq/upload',android_app_upload)
+    app.router.add_get('/android/status',android_status)
+    app.router.add_get('/v1/android/status',android_status)
+    app.router.add_post('/recovery/start',recovery_start)
+    app.router.add_post('/recovery/cancel',recovery_cancel)
+    app.router.add_post('/v1/recovery/start',recovery_start)
+    app.router.add_post('/v1/recovery/cancel',recovery_cancel)
     app.router.add_get('/', home)
     app.router.add_get('/status', status)
     app.router.add_post('/scan', scan)

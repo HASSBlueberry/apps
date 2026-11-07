@@ -1,0 +1,18 @@
+name: BlueberryDroid
+version: "0.1.0"
+slug: blueberry_droid
+description: SSH deployment and Android ingress through BlueberryQDB
+url: https://git.crit.rip/BlueberryFaygo/BlueberryFaygo
+arch: [amd64, aarch64]
+startup: services
+boot: auto
+init: false
+ingress: true
+ingress_port: 8092
+panel_admin: true
+panel_icon: mdi:android
+ports:
+  8092/tcp: null
+  15555/tcp: null
+options: {}
+schema: {}

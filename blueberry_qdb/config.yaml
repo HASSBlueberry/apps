@@ -1,9 +1,11 @@
 name: BlueberryQDB
-version: "0.3.0"
+version: 0.5.0
 slug: blueberry_qdb
-description: Signed-in MyQ phone controller and Android USB bridge
+description: MyQ OAuth App Check renewal through an authorized Android device
 url: https://git.crit.rip/BlueberryFaygo/BlueberryFaygo
-arch: [aarch64, amd64]
+arch:
+- aarch64
+- amd64
 startup: services
 boot: auto
 init: false
@@ -15,16 +17,36 @@ panel_admin: true
 panel_icon: mdi:cellphone-link
 ports:
   8091/tcp: null
-discovery: [blueberry_q]
+discovery:
+- blueberry_q
 hassio_api: true
 hassio_role: default
 options:
-  serial: ""
+  serial: ''
   adb_targets: []
   poll_seconds: 60
   auto_refresh_app_check: true
+  login_recovery_enabled: false
+  myq_email: ''
+  myq_password: ''
+  imap_enabled: false
+  imap_host: ''
+  imap_port: 993
+  imap_username: ''
+  imap_password: ''
+  imap_folder: INBOX
 schema:
   serial: str?
-  adb_targets: [str]
+  adb_targets:
+  - str
   poll_seconds: int(15,3600)
   auto_refresh_app_check: bool
+  login_recovery_enabled: bool
+  myq_email: email?
+  myq_password: password?
+  imap_enabled: bool
+  imap_host: str?
+  imap_port: port
+  imap_username: str?
+  imap_password: password?
+  imap_folder: str?

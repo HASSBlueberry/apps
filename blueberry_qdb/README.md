@@ -1,3 +1,59 @@
+# OAuth and App Check renewal
+
+Integration 0.8.0 offers OAuth credentials plus App Check, or OAuth browser
+sign-in through BlueberryQDB. Other setup methods are deprecated and hidden.
+Existing entries are retained until the user migrates them. OAuth refresh
+rotation is saved immediately, even if a later device request fails.
+Home Assistant diagnostic sensors show access-token expiry, last OAuth
+renewal, App Check expiry and sync time, and the last device sync. Secrets
+are not published as entity attributes. A manually pasted App Check token
+cannot renew itself. Configure BlueberryQDB to retrieve replacements.
+
+BlueberryQDB 0.4.0 keeps App Check in private persistent storage, opens MyQ
+near expiry, and polls its process logs for up to 60 seconds. The panel shows
+expiry and recovery state and can explicitly reveal the usable token for
+60 seconds. Do not post that token in support messages.
+
+Optional login recovery is disabled by default. In the Home Assistant app
+Configuration tab, set `login_recovery_enabled`, `myq_email`, `myq_password`,
+`imap_enabled`, `imap_host`, `imap_port` (993), `imap_username`,
+`imap_password` and `imap_folder` (INBOX). Use the mailbox provider's supported
+IMAP credential or app password. Recovery only reads mail over verified TLS.
+It does not mark messages read, delete mail, or send mail. IMAP credentials
+are stored in Home Assistant app options, so restrict access to configuration
+and backups. Never paste credentials into chat.
+
+The bridge records a mailbox baseline before acting on the phone. It accepts
+only new messages for the configured MyQ email, from notification@myq.com,
+with the exact six-character verification subject. Recovery stops after
+three minutes or on an unknown, locked or obstructed screen. It submits
+credentials and a verification code at most once per attempt. It can select
+an explicitly labelled email delivery button. Prefilled fields that differ
+from the configured values must be cleared on the phone first. UI text input
+currently supports printable ASCII without spaces or percent characters.
+Automatic recovery has a 30-minute cooldown. It does not log out an existing
+session. The app must actually issue and log a fresh token for recovery to
+succeed. A fresh-token path has not been validated on the real login screen.
+
+ADB targets may point to an externally managed Android environment. This
+release does not package ReDroid, Magisk, Zygisk or an integrity provider.
+The current host has no Android Binder devices, and an attestation-capable
+emulator has not been established. Do not assume an emulator will renew
+App Check successfully.
+
+Cloud status is read every 30 seconds and several more times during the
+30 seconds after a command. The integration reports provider states and
+never treats successful command delivery as confirmation of movement.
+Download diagnostics to see allowlisted state values and provider timestamps.
+On the live account inspected during development, MyQ returned a garage door
+with closed state, matching the official app's Closed for 4 hours screen.
+The response contained no light state or capabilities. Separate devices with
+light_state are now retained for light sensors when supplied by MyQ, but
+light actuation and this opener's light availability remain unverified.
+No physical garage command was sent during development.
+
+## Earlier releases and research
+
 # BlueberryQDB native MyQ phone controller
 
 With app 0.3.0 and Blueberry MyQ integration 0.7.0, native mode uses the

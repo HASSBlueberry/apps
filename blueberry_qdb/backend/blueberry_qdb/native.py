@@ -1,6 +1,5 @@
 """State-checked UI relay for the official app. No OAuth or App Check is used."""
 import asyncio
-from contextlib import suppress
 import hashlib
 import json
 import re
@@ -8,7 +7,7 @@ import secrets
 import time
 import xml.etree.ElementTree as ET
 
-from .adb import ADBError, PACKAGE, SERIAL, select_device
+from .adb import ADBError, PACKAGE, SERIAL, select_device, ui_dump
 
 STATES={'closed','open','opening','closing','stopped'}
 BOUNDS=re.compile(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]\Z')
@@ -131,7 +130,7 @@ class NativeController:
         return self.service.state.setdefault('native_doors',[])
 
     async def selected(self):
-        devices=await self.service.android.discover(self.service.options.get('adb_targets',[]))
+        devices=await self.service.android.discover(self.service.targets())
         return select_device(devices,self.service.options.get('serial') or self.service.state['serial'])
 
     async def screen(self,serial):
@@ -145,11 +144,9 @@ class NativeController:
             raise NativeError('native_open_myq')
         path='/data/local/tmp/blueberryqdb-native.xml'
         try:
-            await self.service.android.run('-s',serial,'shell','uiautomator','dump',path)
-            xml=await self.service.android.run('-s',serial,'exec-out','cat',path)
-        finally:
-            with suppress(ADBError,OSError):
-                await self.service.android.run('-s',serial,'shell','rm','-f',path)
+            xml=await ui_dump(self.service.android,serial,path)
+        except ADBError:
+            raise NativeError('native_screen_unreadable') from None
         screen=Screen(xml)
         if any(re.search(r'\boffline\b|\bnot connected\b|\bconnection lost\b',normalized(value)) for value in labels(screen.root)):
             raise NativeError('native_app_offline')
