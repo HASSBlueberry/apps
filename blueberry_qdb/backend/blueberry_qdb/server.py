@@ -49,6 +49,8 @@ class BridgeService:
         self.discovery_uuid = None
         self.supervisor = None
         self.logins = LoginManager(self.android)
+        self.refresh_task=None
+        self.last_refresh_attempt=None
 
     def status(self):
         cache = self.state['cache']
@@ -57,7 +59,8 @@ class BridgeService:
         return {'phones': self.devices, 'selected_serial': serial,
                 'app_check_available': bool(usable),
                 'expires_at': cache.get('expires_at') if usable else None, 'error': self.error,
-                'phone_login':self.logins.summary()}
+                'phone_login':self.logins.summary(),
+                'app_check_refreshing':bool(self.refresh_task and not self.refresh_task.done())}
 
     async def scan(self):
         async with self.lock:
@@ -67,12 +70,45 @@ class BridgeService:
                 if selected != self.state['serial']:
                     self.state['serial'] = selected
                     self.state['cache'] = {}
-                self.state['cache'] = {**await self.android.extract(selected), 'serial': selected}
+                candidate={**await self.android.extract(selected),'serial':selected}
+                cached=self.state['cache']
+                # Old acquisition messages can remain in logcat after a newer
+                # token was imported or observed. Never replace a newer cache.
+                if cached.get('serial')!=selected or candidate['expires_at']>cached.get('expires_at',0):
+                    self.state['cache']=candidate
                 self.error = None
                 save(self.path, self.state)
             except (ADBError, OSError) as error:
                 self.error = str(error) if isinstance(error, ADBError) else 'adb_unavailable'
             return self.status()
+
+    async def request_app_check_refresh(self,automatic=False):
+        login=self.logins.summary()
+        if login.get('status')=='waiting':
+            return  # Never switch away from Chrome during an active sign-in.
+        if self.refresh_task and not self.refresh_task.done():
+            return
+        if automatic and self.last_refresh_attempt is not None and time.monotonic()-self.last_refresh_attempt<300:
+            return
+        self.last_refresh_attempt=time.monotonic()
+        async def refresh():
+            try:
+                devices=await self.android.discover(self.options.get('adb_targets',[]))
+                serial=select_device(devices,self.options.get('serial') or self.state['serial'])
+                if self.logins.summary().get('status')=='waiting':return
+                await self.android.open_myq(serial)
+                await asyncio.sleep(2)
+                await self.scan()
+            except (ADBError,OSError) as error:
+                self.error=str(error) if isinstance(error,ADBError) else 'adb_unavailable'
+        self.refresh_task=asyncio.create_task(refresh())
+
+    async def maybe_refresh_app_check(self):
+        if not self.options.get('auto_refresh_app_check',True):return
+        selected=self.options.get('serial') or self.state['serial']
+        if not any(d['state']=='device' and d['serial']==selected for d in self.devices):return
+        if self.state['cache'].get('expires_at',0)>time.time()+300:return
+        await self.request_app_check_refresh(automatic=True)
 
     async def supervisor_request(self, method, path, payload=None):
         token = os.environ.get('SUPERVISOR_TOKEN')
@@ -109,6 +145,7 @@ class BridgeService:
     async def poll(self):
         while True:
             await self.scan()
+            await self.maybe_refresh_app_check()
             await self.announce()
             await asyncio.sleep(max(15, min(3600, int(self.options.get('poll_seconds', 60)))))
 
@@ -187,6 +224,9 @@ def create_app(service):
             service.state.update(serial=serial,cache={**candidate,'serial':serial})
             save(service.path,service.state)
         return web.json_response({'imported':True})
+    async def refresh_token(request):
+        await service.request_app_check_refresh()
+        return web.json_response({'refresh_requested':True})
     async def start_login(request):
         data=await request.json()
         url=data.get('authorize_url') if isinstance(data,dict) else None
@@ -202,6 +242,9 @@ def create_app(service):
         return web.json_response({'cancelled':True})
     async def cleanup(app):
         await service.logins.close()
+        if service.refresh_task:
+            service.refresh_task.cancel()
+            with suppress(asyncio.CancelledError):await service.refresh_task
     app.on_cleanup.append(cleanup)
     app.router.add_get('/', home)
     app.router.add_get('/status', status)
@@ -211,6 +254,7 @@ def create_app(service):
     app.router.add_get('/connection', connection)
     app.router.add_get('/v1/app-check', token)
     app.router.add_post('/v1/app-check', import_token)
+    app.router.add_post('/v1/app-check/refresh', refresh_token)
     app.router.add_post('/v1/oauth/sessions', start_login)
     app.router.add_get('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', login_result)
     app.router.add_delete('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', cancel_login)

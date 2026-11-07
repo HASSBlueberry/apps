@@ -1,3 +1,18 @@
+# 0.2.1
+
+Separate Chrome startup and human sign-in budgets. Allow 15 minutes after the
+browser is ready, publish callbacks before cleanup, and bound cleanup waits.
+Retain newer App Check caches, request refresh through the official app when
+needed, and avoid interrupting managed Chrome sign-in. Add safe phase status.
+
+# 0.2.0
+
+Add phone Chrome OAuth transport with short-lived sessions and callback
+interception. Home Assistant retains PKCE and obtains account tokens
+without copying a callback or access token. Clean up the dedicated tab and
+ADB forward on completion, cancellation and timeout. Add optional manual
+App Check cache import and safe login phase status in Ingress.
+
 # 0.1.0
 
 Package ADB for USB phone discovery and runtime MyQ App Check extraction.

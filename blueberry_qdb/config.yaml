@@ -1,5 +1,5 @@
 name: BlueberryQDB
-version: "0.2.0"
+version: "0.2.1"
 slug: blueberry_qdb
 description: Android USB discovery and runtime App Check bridge for Blueberry MyQ
 url: https://git.crit.rip/BlueberryFaygo/BlueberryFaygo
@@ -22,7 +22,9 @@ options:
   serial: ""
   adb_targets: []
   poll_seconds: 60
+  auto_refresh_app_check: true
 schema:
   serial: str?
   adb_targets: [str]
   poll_seconds: int(15,3600)
+  auto_refresh_app_check: bool

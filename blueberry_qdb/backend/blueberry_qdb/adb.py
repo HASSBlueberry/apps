@@ -105,7 +105,7 @@ class AndroidBridge:
             raise
         if not pids or not pids[0].isdecimal():
             raise ADBError('open_myq_on_phone')
-        logs = await self.run('-s', serial, 'logcat', '-d', '-v', 'epoch', '-t', '20000', '--pid=' + pids[0])
+        logs = await self.run('-s', serial, 'logcat', '-d', '-b', 'main', '-v', 'epoch', '--pid=' + pids[0], 'MyQ:V', '*:S')
         return extract_token(logs)
 
     async def open_myq(self, serial):
