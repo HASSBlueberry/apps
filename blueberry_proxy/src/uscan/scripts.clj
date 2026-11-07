@@ -26,7 +26,7 @@
                                           100 100 TimeUnit/MILLISECONDS)
             bindings (.getBindings ctx "js")]
         (try
-          (.putMember bindings "inputJson" (json/write-str (dissoc params :networks)))
+          (.putMember bindings "inputJson" (json/write-str (assoc (dissoc params :networks) :broadcasts (vec (for [network (:networks params) :when (> (:size network) 2)] (scope/long-ip (:end network)))))))
           (.putMember bindings "__tcp" (reify ProxyExecutable
                                          (execute [_ args]
                                            (let [ip (.asString (aget args 0)) port (.asInt (aget args 1))]
@@ -38,6 +38,16 @@
                                              (guard! ip port)
                                              (when (> (count hex) 8192) (throw (ex-info "UDP payload exceeds 4096 bytes" {})))
                                              (json/write-str (protocols/udp-probe ip port (.parseHex (java.util.HexFormat/of) hex) (:timeout_ms params)))))))
+          (.putMember bindings "__udpBatch" (reify ProxyExecutable
+                                              (execute [_ args]
+                                                (let [port (.asInt (aget args 0))
+                                                      material (.asString (aget args 1))
+                                                      duration (.asInt (aget args 2))]
+                                                  (when (> (count material) 4194304) (throw (ex-info "UDP batch description exceeds 4 MiB" {})))
+                                                  (let [messages (json/read-str material :key-fn keyword)]
+                                                    (when-not (and (vector? messages) (<= 1 (count messages) 2048)) (throw (ex-info "Invalid UDP batch" {})))
+                                                    (doseq [message messages] (guard! (:ip message) port))
+                                                    (json/write-str (protocols/udp-batch! params port messages duration check!)))))))
           (.putMember bindings "__emit" (reify ProxyExecutable
                                           (execute [_ args]
                                             (check!)
@@ -47,7 +57,7 @@
                                                 (when-not (scope/contains-ip? (:networks params) (:ip record)) (throw (ex-info "Script emitted an IP outside its CIDRs" {})))
                                                 (emit! record)))
                                             nil)))
-          (.eval ctx "js" "const p = JSON.parse(inputJson); const ctx = Object.freeze({targets: Object.freeze(p.targets), parameters: Object.freeze(p), tcp: (ip,port) => __tcp(String(ip),port), udp: (ip,port,hex) => JSON.parse(__udp(String(ip),port,String(hex))), emit: record => __emit(JSON.stringify(record))});")
+          (.eval ctx "js" "const p = JSON.parse(inputJson); const ctx = Object.freeze({targets: Object.freeze(p.targets), parameters: Object.freeze(p), udpBatch: (port,packets,duration=p.duration_ms) => JSON.parse(__udpBatch(port,JSON.stringify(packets),duration)), tcp: (ip,port) => __tcp(String(ip),port), udp: (ip,port,hex) => JSON.parse(__udp(String(ip),port,String(hex))), emit: record => __emit(JSON.stringify(record))});")
           (.eval ctx "js" script)
           (.eval ctx "js" "if (typeof scan !== 'function') throw new Error('Declare scan(ctx)'); scan(ctx);")
           (finally (.cancel timeout false)))))))

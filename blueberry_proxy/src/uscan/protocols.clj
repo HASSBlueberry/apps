@@ -37,6 +37,45 @@
       (catch SocketTimeoutException _ nil)
       (catch java.net.PortUnreachableException _ nil))))
 
+(defn udp-batch! [params port messages duration check!]
+  (let [local-ips (set (map :ip (scope/interfaces)))
+        local-port (:udp_local_port params 0)
+        _ (when-not (and (integer? local-port) (<= 0 local-port 65535)
+                         (or (zero? local-port) (some #{local-port} (:ports params))))
+            (throw (ex-info "udp_local_port must be zero or a registered scanner port" {})))
+        _ (when-not (and (integer? duration) (<= 1 duration (:duration_ms params)))
+            (throw (ex-info "UDP receive duration exceeds the registered scanner window" {})))
+        _ (when-not (and (vector? messages) (<= 1 (count messages) 2048))
+            (throw (ex-info "UDP batch requires 1 to 2048 packets" {})))
+        payloads (mapv (fn [{:keys [ip hex]}]
+                         (when-not (and (scope/contains-ip? (:networks params) ip)
+                                        (string? hex) (<= (count hex) 8192) (even? (count hex)))
+                           (throw (ex-info "UDP batch packet is outside its CIDRs or payload limit" {})))
+                         [ip (.parseHex (java.util.HexFormat/of) hex)]) messages)
+        _ (when (> (reduce + (map #(alength ^bytes (second %)) payloads)) 1048576)
+            (throw (ex-info "UDP batch payload exceeds 1 MiB" {})))]
+    (with-open [socket (java.net.DatagramSocket. nil)]
+      (.setReuseAddress socket true)
+      (.setBroadcast socket (true? (:udp_broadcast params)))
+      (.bind socket (InetSocketAddress. (int local-port)))
+      (.setSoTimeout socket 100)
+      ;; Unconnected reception supports fixed-port and broadcast discovery replies.
+      (doseq [[ip payload] payloads]
+        (check!)
+        (.send socket (DatagramPacket. ^bytes payload (alength ^bytes payload) (InetAddress/getByName ip) (int port))))
+      (let [deadline (+ (System/currentTimeMillis) duration)]
+        (loop [result [] total 0]
+          (check!)
+          (if (or (>= (System/currentTimeMillis) deadline) (>= (count result) 2048) (> total 4194304)) result
+            (let [packet (DatagramPacket. (byte-array 65507) 65507)
+                  received (try
+                             (.receive socket packet)
+                             (let [ip (.getHostAddress (.getAddress packet))]
+                               (when (and (not (contains? local-ips ip)) (scope/contains-ip? (:networks params) ip) (some #{(.getPort packet)} (:ports params)))
+                                 {:ip ip :port (.getPort packet) :hex (.formatHex (java.util.HexFormat/of) (.getData packet) 0 (.getLength packet))}))
+                             (catch SocketTimeoutException _ nil))]
+              (recur (cond-> result received (conj received)) (+ total (if received (.getLength packet) 0))))))))))
+
 (defn tcp-scan! [params emit! check!]
   (let [pool (Executors/newFixedThreadPool (int (:workers params)))
         completion (java.util.concurrent.ExecutorCompletionService. pool)

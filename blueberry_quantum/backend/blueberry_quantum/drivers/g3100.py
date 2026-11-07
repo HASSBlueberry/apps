@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -17,6 +18,8 @@ class G3100Provider(Provider):
         super().__init__(session, config)
         self.logged_in = False
         self.report = None
+        self.inspection_attempted = False
+        self.inspection_error = None
         self.auth_attempted = False
         self.dns_cfg = {}
         self.gateway_cfg = {}
@@ -43,9 +46,15 @@ class G3100Provider(Provider):
             raise ProviderError('Gateway did not grant a usable administration session')
         self.logged_in = True
     async def inspect(self):
+        self.inspection_attempted = True
+        self.inspection_error = None
         self.report = await super().inspect()
         return self.report
     async def snapshot(self):
+        if self.config.get('write_enabled') and self.report is None and not self.inspection_attempted:
+            self.inspection_attempted=True
+            try:await asyncio.wait_for(self.inspect(),timeout=25)
+            except (ProviderError,TimeoutError,OSError):self.inspection_error='Could not verify this firmware. Use Inspect provider to retry.'
         if not self.logged_in: await self.login()
         self.connection_cfg = {}
         status_text = await self.text('/cgi/cgi_status.js')
@@ -109,7 +118,7 @@ class G3100Provider(Provider):
                 'devices': devices, 'networks': networks, 'dns': dns_rows, 'forwards': forwards,
                 'capabilities': {'devices': not bool(errors.get('devices')), 'dns_read': not bool(errors.get('dns')),
                                  'dns_write': writes and evidence.get('profiles', {}).get('dns', False) and bool(self.dns_cfg), 'forwards_read': not bool(errors.get('forwards')), 'forwards_write': forwards_write},
-                'errors': errors, 'profile': 'luci_cgi_experimental', 'inspection': evidence}
+                'errors': {**errors,**({'inspection':self.inspection_error} if self.inspection_error else {})}, 'profile': 'luci_cgi_experimental', 'inspection': evidence}
         await self.gateway_settings(result)
         return result
 

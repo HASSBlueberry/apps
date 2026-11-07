@@ -89,25 +89,32 @@ class QuantumProviderPanel extends HTMLElement {
     const definitions = this.data.definitions || {};
     for (const [kind, definition] of Object.entries(definitions)) types.add(new Option(definition.title, kind));
     const selected = this.data.providers.find(row => row.id === this.selected);
+    let editing = !!selected;
     if (selected && definitions[selected.kind]) types.value = selected.kind;
     const editor = element('div');
-    const edit = element('input', undefined, {type: 'checkbox'});
-    const editLabel = element('label', 'Update selected provider'); editLabel.append(edit);
+    const mode = element('p'); mode.className = 'muted';
+    const add = element('button', 'Add another provider', {type:'button'});
+    const edit = element('button', 'Edit selected provider', {type:'button'}); edit.disabled = !selected;
     const render = () => {
       editor.replaceChildren();
       const definition = definitions[types.value]; if (!definition) return;
-      const current = edit.checked && selected?.kind === types.value ? selected : {};
-      const form = schemaForm(definition.configuration, current, 'Save provider', (values, form) => this.perform(async () => {
+      mode.textContent = editing ? 'Editing ' + (selected.name || definition.title) : 'Creating a new provider';
+      types.disabled = editing;
+      const current = editing ? selected : {};
+      const form = schemaForm(definition.configuration, current, editing ? 'Save provider settings' : 'Create provider', (values, form) => this.perform(async () => {
         const body = {...values, kind: types.value};
-        if (edit.checked) body.id = this.selected;
+        if (editing) body.id = selected.id;
         const result = await this.request('configure', body);
         form.reset(); this.selected = result.id; this.plan = null;
+        this.message = 'Provider settings saved.';
         await this.reload();
       }));
       editor.append(form);
     };
-    types.onchange = render; edit.onchange = render;
-    details.append(types, editLabel, editor); render(); container.append(details);
+    add.onclick = () => { editing = false; render(); };
+    edit.onclick = () => { editing = true; types.value = selected.kind; render(); };
+    types.onchange = render;
+    details.append(mode, add, edit, types, editor); render(); container.append(details);
   }
   renderActions(container, snapshot) {
     if (!snapshot.actions?.length) return;
@@ -188,8 +195,23 @@ class QuantumProviderPanel extends HTMLElement {
   }
   render() {
     const root = this.shadowRoot; root.replaceChildren();
-    root.append(element('style', `:host{display:block;font:inherit;color:inherit}main{padding:16px}[hidden]{display:none!important}label{display:block;margin:8px 0}input,select,textarea,button{font:inherit;color:inherit;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#aaa);border-radius:5px;padding:7px;max-width:100%;box-sizing:border-box}input,select,textarea{margin-left:8px}button{cursor:pointer;margin:4px}button:disabled{opacity:.5;cursor:default}details{border-top:1px solid var(--divider-color,#aaa);margin-top:12px;padding:10px 0}summary{cursor:pointer;font-weight:600}table{width:100%;text-align:left;border-collapse:collapse;display:block;overflow:auto}th,td{padding:8px;border-bottom:1px solid var(--divider-color,#ddd)}small{display:block;line-height:1.5}section{border:1px solid var(--primary-color,#478);padding:12px;margin-top:12px}.error{color:var(--error-color,#b22)}dd{margin-bottom:8px}@media(max-width:600px){input,select,textarea{display:block;margin-left:0;width:100%}input[type=checkbox]{display:inline;width:auto}}`));
-    const main = element('main'); main.append(element('h2', 'BlueberryQuantum'));
+    root.append(element('style', `
+      :host{display:block;font-family:var(--paper-font-body1_-_font-family,inherit);color:var(--primary-text-color,inherit)}
+      main{padding:20px}[hidden]{display:none!important}h2{font-size:20px;line-height:1.4;margin:0 0 14px}h3,h4{font-size:14px;margin:16px 0 10px}
+      label{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:10px 0;font-size:13px}
+      input,select,textarea,button{font:inherit;font-size:13px;color:var(--primary-text-color,inherit);background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#ddd);border-radius:9px;padding:9px 11px;max-width:100%;min-width:0;box-sizing:border-box}
+      input:not([type=checkbox]),select,textarea{flex:1;min-width:160px}textarea{min-height:64px}
+      input[type=checkbox]{accent-color:var(--primary-color,#4595d1);width:17px;height:17px}
+      button{cursor:pointer;margin:4px}button:hover{background:var(--secondary-background-color,#f5f5f5)}button:disabled{opacity:.5;cursor:default}
+      button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--primary-color,#4595d1);outline-offset:2px}
+      details{border-top:1px solid var(--divider-color,#ddd);margin-top:14px;padding:12px 0}summary{cursor:pointer;font-size:14px;font-weight:500}
+      table{width:100%;text-align:left;border-collapse:collapse;display:block;overflow:auto;font-size:13px}th,td{padding:8px;border-bottom:1px solid var(--divider-color,#ddd)}td button{font-size:12px;padding:6px 8px}
+      small,.muted{display:block;font-size:12px;line-height:1.6;color:var(--secondary-text-color,#667)}label small{flex-basis:100%}
+      section{border:1px solid var(--primary-color,#4595d1);border-radius:9px;padding:12px;margin-top:14px}
+      .error{color:var(--error-color,#c33)}[role=alert]{font-size:13px;line-height:1.5}dd{margin-bottom:8px;overflow-wrap:anywhere}
+      @media(max-width:400px){main{padding:14px}input:not([type=checkbox]),select,textarea{width:100%;flex-basis:100%}}
+    `));
+    const main = element('main'); main.append(element('h2', this.title || 'BlueberryQuantum'));
     const message = element('p', this.message || '', {role: 'alert'}); if (this.failed) message.className = 'error'; main.append(message);
     const providers = this.data.providers || [];
     if (!providers.some(row => row.id === this.selected)) this.selected = providers[0]?.id;
@@ -218,5 +240,5 @@ class QuantumProviderPanel extends HTMLElement {
     main.inert = !!this.busy; root.append(main);
   }
 }
-customElements.define('quantum-provider-panel', QuantumProviderPanel);
+if (!customElements.get('quantum-provider-panel')) customElements.define('quantum-provider-panel', QuantumProviderPanel);
 export {QuantumProviderPanel, schemaForm};

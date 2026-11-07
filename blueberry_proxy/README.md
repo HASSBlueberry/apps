@@ -98,3 +98,7 @@ point your router or DHCP clients at the Home Assistant host.
 ## License
 
 EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0 (see `LICENSE`).
+
+### Fixed-port UDP scanners
+
+GraalJS UScan scripts can call `ctx.udpBatch(port, [{ip, hex}], durationMs)` and receive an array of `{ip, port, hex}` replies. The scanner parameters `udp_local_port` and `udp_broadcast` select a registered source port and enable directed broadcast. `ctx.parameters.broadcasts` lists broadcasts derived from the selected CIDRs. Every target and destination port is checked against the job scope, every packet consumes the script probe budget, and replies from local interface addresses are ignored. Batches are bounded to 2048 packets, 1 MiB of outgoing payload, 2048 replies and 4 MiB of incoming payload. Duration cannot exceed the registered `duration_ms`. Provider packet formats remain in their SRE integrations.

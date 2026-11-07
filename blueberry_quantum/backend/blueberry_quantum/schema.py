@@ -13,10 +13,10 @@ ID=field('ID',maxLength=128,**{'x-hidden':True})
 ENABLED=field('Enabled','boolean')
 IP=field('IPv4 address',format='ipv4')
 COMMON_CONFIG={
- 'name':field('Provider name',maxLength=120), 'url':field('API URL',format='url'),
+ 'name':field('Provider name',maxLength=120,**{'x-reconnect':False}), 'url':field('API URL',format='url'),
  'verify_tls':field('Verify HTTPS certificates','boolean',default=True),
- 'write_enabled':field('Enable supported writes','boolean',default=False),
- 'networks':field('LAN CIDRs','array',items=field('CIDR',format='ipv4-network'),default=[],maxItems=32),
+ 'write_enabled':field('Enable supported writes','boolean',default=False,**{'x-reconnect':False}),
+ 'networks':field('LAN CIDRs','array',items=field('CIDR',format='ipv4-network'),default=[],maxItems=32,**{'x-reconnect':False}),
 }
 DNS=obj({'id':ID,'name':field('DNS name',format='hostname'),'ip':field('Address',format='ip')},['name','ip'])
 FORWARD=obj({'id':ID,'name':field('Rule name',default='Blueberry rule',maxLength=80),

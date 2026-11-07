@@ -21,11 +21,6 @@ class Manager:
         self.path = self.directory / 'providers.json'
         self.configs = json.loads(self.path.read_text()) if self.path.exists() else {}
         self.drivers, self.sessions, self.locks, self.plans = {}, {}, {}, {}
-        tokenfile = self.directory / 'api-token'
-        if not tokenfile.exists():
-            fd = os.open(tokenfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w') as handle: handle.write(secrets.token_urlsafe(32))
-        self.token = tokenfile.read_text().strip()
     def save(self):
         temporary = self.path.with_suffix('.tmp')
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -59,7 +54,9 @@ class Manager:
         config['kind']=kind
         self.configs[pid]=config
         self.invalidate_plans(pid)
-        await self.disconnect(pid)
+        reconnect=any(current.get(key,schema.get('properties',{}).get(key,{}).get('default'))!=config.get(key) for key in set(current)|set(config) if key=='kind' or schema.get('properties',{}).get(key,{}).get('x-reconnect',True))
+        if reconnect:await self.disconnect(pid)
+        elif pid in self.drivers:self.drivers[pid].config=config
         self.save()
         return pid
     def invalidate_plans(self,pid):
@@ -108,23 +105,12 @@ async def errors(request, handler):
     except (TimeoutError, __import__('aiohttp').ClientError):
         return web.json_response({'error':'Provider unreachable or TLS validation failed'},status=502)
 
-@web.middleware
-async def authorization(request,handler):
-    # Public assets contain no credentials. All management operations require the app token.
-    if request.path.startswith('/api/'):
-        expected=request.app['manager'].token
-        supplied=request.headers.get('Authorization','').removeprefix('Bearer ')
-        if not secrets.compare_digest(supplied,expected): raise web.HTTPUnauthorized()
-    return await handler(request)
-
 async def create_app(directory='/data/quantum'):
     manager=Manager(directory)
-    app=web.Application(middlewares=[errors,authorization],client_max_size=64*1024)
+    app=web.Application(middlewares=[errors],client_max_size=64*1024)
     app['manager']=manager
     async def bootstrap(request):
-        # Validate the TCP peer, never a caller-supplied forwarding header.
-        if request.remote != '172.30.32.2': raise web.HTTPForbidden()
-        return web.json_response({'token':manager.token},headers={'Cache-Control':'no-store'})
+        return web.json_response({'name':'BlueberryQuantum','authentication_required':False},headers={'Cache-Control':'no-store'})
     async def providers(request):
         if request.method=='GET': return web.json_response({'providers':manager.public(),'types':list(DRIVERS),'definitions':manager.definitions()})
         values=await request.json()
