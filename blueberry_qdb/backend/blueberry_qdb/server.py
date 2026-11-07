@@ -9,7 +9,8 @@ import time
 import uuid
 
 from aiohttp import ClientError, ClientSession, web
-from .adb import ADBError, AndroidBridge, command, select_device
+from .adb import ADBError, AndroidBridge, command, select_device, extract_token
+from .oauth import LoginManager, PhoneLoginError
 
 
 def save(path, value):
@@ -47,6 +48,7 @@ class BridgeService:
         self.csrf = secrets.token_urlsafe(32)
         self.discovery_uuid = None
         self.supervisor = None
+        self.logins = LoginManager(self.android)
 
     def status(self):
         cache = self.state['cache']
@@ -54,7 +56,8 @@ class BridgeService:
         usable = cache.get('serial') == serial and cache.get('expires_at', 0) > time.time() + 60
         return {'phones': self.devices, 'selected_serial': serial,
                 'app_check_available': bool(usable),
-                'expires_at': cache.get('expires_at') if usable else None, 'error': self.error}
+                'expires_at': cache.get('expires_at') if usable else None, 'error': self.error,
+                'phone_login':self.logins.summary()}
 
     async def scan(self):
         async with self.lock:
@@ -130,7 +133,7 @@ def create_app(service):
             response.headers['X-Content-Type-Options'] = 'nosniff'
             response.headers['Referrer-Policy'] = 'no-referrer'
             return response
-        except ADBError as error:
+        except (ADBError, PhoneLoginError) as error:
             return web.json_response({'error': str(error)}, status=409)
 
     app = web.Application(middlewares=[protect], client_max_size=16384)
@@ -144,6 +147,8 @@ def create_app(service):
     async def select(request):
         data = await request.json()
         async with service.lock:
+            if service.logins.summary()['status'] in ('waiting','ready'):
+                raise PhoneLoginError('phone_login_in_progress')
             serial = str(data.get('serial', ''))
             if not any(d['serial'] == serial for d in service.devices):
                 raise ADBError('selected_phone_missing')
@@ -168,6 +173,36 @@ def create_app(service):
         # Only authenticated ingress users and API key holders may view pairing
         # details. This endpoint never includes the MyQ attestation itself.
         return web.json_response({'app_bridge_key': service.state['api_key'], 'port': 8091})
+    async def import_token(request):
+        data=await request.json()
+        token=data.get('token','') if isinstance(data,dict) else ''
+        if not isinstance(token,str):
+            raise ADBError('invalid_app_check_token')
+        # Use the same expiry checks as runtime extraction; the identity
+        # provider remains responsible for validating the signature.
+        candidate=extract_token('New AppCheck token is acquired: token = '+token)
+        async with service.lock:
+            service.devices=await service.android.discover(service.options.get('adb_targets',[]))
+            serial=select_device(service.devices,service.options.get('serial') or service.state['serial'])
+            service.state.update(serial=serial,cache={**candidate,'serial':serial})
+            save(service.path,service.state)
+        return web.json_response({'imported':True})
+    async def start_login(request):
+        data=await request.json()
+        url=data.get('authorize_url') if isinstance(data,dict) else None
+        async with service.lock:
+            service.devices=await service.android.discover(service.options.get('adb_targets',[]))
+            serial=select_device(service.devices,service.options.get('serial') or service.state['serial'])
+            return web.json_response(await service.logins.start(serial,url))
+    async def login_result(request):
+        return web.json_response(await service.logins.result(request.match_info['session_id']))
+    async def cancel_login(request):
+        await service.logins.result(request.match_info['session_id'])
+        await service.logins.close()
+        return web.json_response({'cancelled':True})
+    async def cleanup(app):
+        await service.logins.close()
+    app.on_cleanup.append(cleanup)
     app.router.add_get('/', home)
     app.router.add_get('/status', status)
     app.router.add_post('/scan', scan)
@@ -175,6 +210,10 @@ def create_app(service):
     app.router.add_post('/open-myq', open_myq)
     app.router.add_get('/connection', connection)
     app.router.add_get('/v1/app-check', token)
+    app.router.add_post('/v1/app-check', import_token)
+    app.router.add_post('/v1/oauth/sessions', start_login)
+    app.router.add_get('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', login_result)
+    app.router.add_delete('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', cancel_login)
     return app
 
 

@@ -207,3 +207,16 @@ UScan runs bounded background discovery jobs using native mDNS/DNS-SD, WSD, ONVI
 A GraalJS scanner implements `function scan(ctx)`. It can iterate `ctx.targets`, read `ctx.parameters`, use `ctx.tcp(ip, port)` and `ctx.udp(ip, port, hexPayload)`, and publish `ctx.emit({ip, mac, hostname, ports, evidence})`. Hosts and ports are constrained by the profile. Scripts have no Java, filesystem or native-thread access. Context cancellation enforces the job deadline. These are administrative APIs on the same trusted-LAN and Ingress management boundary as the proxy's other configuration APIs.
 
 The dashboard displays scan jobs, per-scanner failures and discovered devices. Discovery and scan events stream over `/events`. The Home Assistant integration maintains that connection while loaded and fires `blueberry_proxy_discovery` and `blueberry_proxy_scan` events, even when its card is closed. The card can start discovery. The legacy `/scan` response includes UScan evidence and fresh ARP records for existing integrations. Multicast discovery remains local to selected interfaces; explicit routed CIDRs do not create multicast forwarding.
+
+## Legacy optional schema fields
+
+Version 0.3.4 fixes literal keys such as `value?`, `ttl?` and `priority?` created
+by the older app schema. Optional fields must be declared as `value: str?`,
+not `value?: str`. Runtime normalization accepts legacy keys in persisted
+rules and app options, while corrected keys take precedence.
+
+When troubleshooting static answers, query BlueberryProxy directly, for
+example `dig @192.168.1.190 cm.gelighting.com A`. If that returns the configured
+address but a query through the router returns no A records, the remaining
+failure is in the router forwarding or filtering path. Local cache flushing
+does not change which DNS server the client uses.

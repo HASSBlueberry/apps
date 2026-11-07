@@ -259,7 +259,7 @@
 (defn- handle-status [store up-store ex]
   (send-json ex 200
              {:name "blueberryProxy"
-              :version "0.3.2"
+              :version "0.3.4"
               :uptime-ms (- (System/currentTimeMillis) started-at)
               :stats (storage/stats store)
               :rules (count (storage/list-rules store))

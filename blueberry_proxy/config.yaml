@@ -1,5 +1,5 @@
 name: BlueberryProxy
-version: 0.3.3
+version: 0.3.4
 slug: blueberry_proxy
 description: Home network DNS, blocklists, reverse proxy maps and device research tools
 url: https://git.crit.rip/BlueberryFaygo/BlueberryFaygo
@@ -101,46 +101,46 @@ schema:
       match_type: match(exact|suffix|regex)
       match: str
       action: match(static|blackhole|redirect|upstream|passthrough)
-      value?: str
-      ttl?: int
-      priority?: int
+      value: str?
+      ttl: int?
+      priority: int?
   proxy_maps:
-    - id?: str
-      host?: str
-      path?: str
+    - id: str?
+      host: str?
+      path: str?
       target: str
-      enabled?: bool
-      websocket_listener?: str
-      request_header_transformer?: str
-      response_header_transformer?: str
-      request_body_transformer?: str
-      response_body_transformer?: str
-      request_script_transformer?: str
-      response_script_transformer?: str
+      enabled: bool?
+      websocket_listener: str?
+      request_header_transformer: str?
+      response_header_transformer: str?
+      request_body_transformer: str?
+      response_body_transformer: str?
+      request_script_transformer: str?
+      response_script_transformer: str?
   blocklists:
-    - id?: str
+    - id: str?
       url: str
-      enabled?: bool
+      enabled: bool?
   ptr_records:
-    - id?: str
+    - id: str?
       ip: str
       hostname: str
-      ttl?: int
-      priority?: int
+      ttl: int?
+      priority: int?
   transformers:
-    - id?: str
+    - id: str?
       type: str
       script: str
   proxy_listeners:
-    - id?: str
+    - id: str?
       map_id: str
-      bind?: str
+      bind: str?
       port: port
-      enabled?: bool
-      tls?: bool
+      enabled: bool?
+      tls: bool?
   proxy_mounts:
-    - id?: str
+    - id: str?
       proxy_map_id: str
       path: str
       target: str
-      enabled?: bool
+      enabled: bool?

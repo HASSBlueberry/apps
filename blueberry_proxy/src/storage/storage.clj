@@ -8,10 +8,23 @@
   (:import [java.nio.file Files StandardCopyOption]
            [java.nio.file.attribute FileAttribute]))
 
+(defn normalize-option-keys
+  "Read HA option keys and legacy optional-field names. Clean keys win aliases."
+  [value]
+  (cond
+    (map? value) (into {} (map (fn [[k v]]
+                                 [(keyword (-> (name k) (str/replace #"\?$" "")
+                                               (str/replace "_" "-")))
+                                  (normalize-option-keys v)]))
+                      (sort-by (fn [[k _]] (if (str/ends-with? (name k) "?") 0 1)) value))
+    (vector? value) (mapv normalize-option-keys value)
+    :else value))
+
 (defn normalize-rule
   "Accept nested rules and flat API/HA keys without confusing target and match."
   [rule]
-  (let [match (when (map? (:match rule)) (:match rule))]
+  (let [rule (normalize-option-keys rule)
+        match (when (map? (:match rule)) (:match rule))]
     (-> rule
         (assoc :match {:type (keyword (or (:type match) (:match_type rule)
                                          (:match-type rule) "suffix"))

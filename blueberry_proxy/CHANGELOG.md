@@ -1,6 +1,15 @@
 # Change Log
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](https://keepachangelog.com/).
 
+## [0.3.4]
+
+Correct Home Assistant optional schema declarations such as `value: str?`.
+Previously `value?: str` produced a literal `value?` option, so static rules
+returned no A records even when they matched. Migrate legacy optional field
+names in app options and stored DNS rules, preferring corrected field names
+when both exist. Update the status API version and add packaging validation
+for misplaced optional markers.
+
 ## [0.3.3]
 
 Synchronize Home Assistant DNS configuration by rule ID on every startup,

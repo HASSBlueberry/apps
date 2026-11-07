@@ -59,14 +59,7 @@
   (let [f (io/file "/data/options.json")]
     (when (.exists f)
       (try
-        (letfn [(normalize-keys [v]
-                  (cond
-                    (map? v) (into {} (map (fn [[k value]]
-                                             [(keyword (str/replace (name k) "_" "-"))
-                                              (normalize-keys value)])) v)
-                    (vector? v) (mapv normalize-keys v)
-                    :else v))]
-          (normalize-keys (json/read-str (slurp f) :key-fn keyword)))
+        (storage/normalize-option-keys (json/read-str (slurp f) :key-fn keyword))
         (catch Exception e
           (println "config: cannot read options.json -" (.getMessage e)))))))
 
