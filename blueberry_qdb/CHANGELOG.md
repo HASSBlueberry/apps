@@ -1,3 +1,12 @@
+# 0.3.0
+
+Add native MyQ UI control with one sign-in inside the official app. Add an
+immediate Check connection now action, read-only control calibration, state-
+checked single gestures and a dedicated native HASS mode. Keep OAuth and App
+Check out of native setup. Add explicit cancellation of old Chrome sessions.
+Preserve native bindings in version 3 app state. Native operation is covered
+with synthetic screens; physical door operation remains unverified.
+
 # 0.2.1
 
 Separate Chrome startup and human sign-in budgets. Allow 15 minutes after the

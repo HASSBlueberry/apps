@@ -220,3 +220,10 @@ example `dig @192.168.1.190 cm.gelighting.com A`. If that returns the configured
 address but a query through the router returns no A records, the remaining
 failure is in the router forwarding or filtering path. Local cache flushing
 does not change which DNS server the client uses.
+
+In 0.3.5, an incomplete configuration rule with the same ID, match and action
+retains its existing static target and emits a configuration warning. Restore
+`value: 192.168.1.190` in the affected HASS rule to repair the source options.
+A new static rule without a value is rejected by the API; an invalid configured
+rule with no recoverable target returns SERVFAIL and appears as static-invalid
+in the query log. Missing targets are no longer successful empty answers.

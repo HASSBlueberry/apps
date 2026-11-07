@@ -155,7 +155,10 @@
     "GET" (send-json ex 200 {:rules (storage/list-rules store)})
     "POST" (let [body (parse-body (read-body ex))]
              (if (:match body)
-               (send-json ex 200 {:rule (storage/add-rule! store body)})
+               (try
+                 (send-json ex 200 {:rule (storage/add-rule! store body)})
+                 (catch clojure.lang.ExceptionInfo error
+                   (send-json ex (:status (ex-data error) 400) {:error (.getMessage error)})))
                (send-json ex 400 {:error "rule requires :match and :action"})))
     "DELETE" (let [id (or (:id query) (get query "id"))]
                (if id
@@ -259,7 +262,7 @@
 (defn- handle-status [store up-store ex]
   (send-json ex 200
              {:name "blueberryProxy"
-              :version "0.3.4"
+              :version "0.3.5"
               :uptime-ms (- (System/currentTimeMillis) started-at)
               :stats (storage/stats store)
               :rules (count (storage/list-rules store))

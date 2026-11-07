@@ -11,6 +11,7 @@ import uuid
 from aiohttp import ClientError, ClientSession, web
 from .adb import ADBError, AndroidBridge, command, select_device, extract_token
 from .oauth import LoginManager, PhoneLoginError
+from .native import NativeController, NativeError
 
 
 def save(path, value):
@@ -27,11 +28,12 @@ def save(path, value):
 
 def migrate_state(value):
     version = value.get('version', 1)
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise ValueError('unsupported_state_version')
-    return {'version': 2, 'id': value.get('id') or str(uuid.uuid4()),
+    return {'version': 3, 'id': value.get('id') or str(uuid.uuid4()),
             'api_key': value.get('api_key') or secrets.token_urlsafe(32),
-            'serial': value.get('serial', ''), 'cache': value.get('cache', {})}
+            'serial': value.get('serial', ''), 'cache': value.get('cache', {}),
+            'native_doors':value.get('native_doors',[])}
 
 
 class BridgeService:
@@ -51,6 +53,7 @@ class BridgeService:
         self.logins = LoginManager(self.android)
         self.refresh_task=None
         self.last_refresh_attempt=None
+        self.native=NativeController(self,save)
 
     def status(self):
         cache = self.state['cache']
@@ -60,7 +63,8 @@ class BridgeService:
                 'app_check_available': bool(usable),
                 'expires_at': cache.get('expires_at') if usable else None, 'error': self.error,
                 'phone_login':self.logins.summary(),
-                'app_check_refreshing':bool(self.refresh_task and not self.refresh_task.done())}
+                'app_check_refreshing':bool(self.refresh_task and not self.refresh_task.done()),
+                'native_binding_count':len(self.state['native_doors'])}
 
     async def scan(self):
         async with self.lock:
@@ -96,6 +100,7 @@ class BridgeService:
                 devices=await self.android.discover(self.options.get('adb_targets',[]))
                 serial=select_device(devices,self.options.get('serial') or self.state['serial'])
                 if self.logins.summary().get('status')=='waiting':return
+                if self.native.lock.locked() or (automatic and self.state.get('native_doors')):return
                 await self.android.open_myq(serial)
                 await asyncio.sleep(2)
                 await self.scan()
@@ -104,6 +109,7 @@ class BridgeService:
         self.refresh_task=asyncio.create_task(refresh())
 
     async def maybe_refresh_app_check(self):
+        if self.state['native_doors']:return  # Native control needs no App Check.
         if not self.options.get('auto_refresh_app_check',True):return
         selected=self.options.get('serial') or self.state['serial']
         if not any(d['state']=='device' and d['serial']==selected for d in self.devices):return
@@ -150,7 +156,8 @@ class BridgeService:
             await asyncio.sleep(max(15, min(3600, int(self.options.get('poll_seconds', 60)))))
 
 
-UI_PATHS = {'/', '/status', '/scan', '/select', '/open-myq', '/connection'}
+UI_PATHS = {'/', '/status', '/scan', '/select', '/open-myq', '/connection',
+            '/native/inspect','/native/bind','/native/devices','/cancel-cloud-login'}
 
 
 def create_app(service):
@@ -170,7 +177,7 @@ def create_app(service):
             response.headers['X-Content-Type-Options'] = 'nosniff'
             response.headers['Referrer-Policy'] = 'no-referrer'
             return response
-        except (ADBError, PhoneLoginError) as error:
+        except (ADBError, PhoneLoginError, NativeError) as error:
             return web.json_response({'error': str(error)}, status=409)
 
     app = web.Application(middlewares=[protect], client_max_size=16384)
@@ -183,6 +190,7 @@ def create_app(service):
         return web.json_response(await service.scan())
     async def select(request):
         data = await request.json()
+        if service.native.lock.locked():raise NativeError('native_controller_busy')
         async with service.lock:
             if service.logins.summary()['status'] in ('waiting','ready'):
                 raise PhoneLoginError('phone_login_in_progress')
@@ -195,6 +203,7 @@ def create_app(service):
             save(service.path, service.state)
         return web.json_response(await service.scan())
     async def open_myq(request):
+        if service.native.lock.locked():raise NativeError('native_controller_busy')
         async with service.lock:
             serial = select_device(service.devices, service.options.get('serial') or service.state['serial'])
             await service.android.open_myq(serial)
@@ -240,6 +249,21 @@ def create_app(service):
         await service.logins.result(request.match_info['session_id'])
         await service.logins.close()
         return web.json_response({'cancelled':True})
+    async def native_inspect(request):
+        if service.logins.summary()['status'] in ('waiting','ready'):raise PhoneLoginError('phone_login_in_progress')
+        data=await request.json()
+        return web.json_response(await service.native.inspect(data.get('door_name')))
+    async def native_bind(request):
+        data=await request.json()
+        return web.json_response(await service.native.bind(data.get('inspection'),data.get('control_key'),data.get('gesture','tap')))
+    async def native_devices(request):
+        return web.json_response({'bridge_id':service.state['id'],'devices':await service.native.devices()})
+    async def native_command(request):
+        data=await request.json()
+        return web.json_response(await service.native.command(request.match_info['binding_id'],data.get('action')))
+    async def cancel_cloud(request):
+        await service.logins.close()
+        return web.json_response({'cancelled':True})
     async def cleanup(app):
         await service.logins.close()
         if service.refresh_task:
@@ -258,6 +282,14 @@ def create_app(service):
     app.router.add_post('/v1/oauth/sessions', start_login)
     app.router.add_get('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', login_result)
     app.router.add_delete('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', cancel_login)
+    app.router.add_post('/v1/native/inspect',native_inspect)
+    app.router.add_post('/v1/native/bind',native_bind)
+    app.router.add_get('/v1/native/devices',native_devices)
+    app.router.add_post('/v1/native/doors/{binding_id:[a-f0-9]+}/command',native_command)
+    app.router.add_post('/native/inspect',native_inspect)
+    app.router.add_post('/native/bind',native_bind)
+    app.router.add_get('/native/devices',native_devices)
+    app.router.add_post('/cancel-cloud-login',cancel_cloud)
     return app
 
 

@@ -1,4 +1,45 @@
-# BlueberryQDB
+# BlueberryQDB native MyQ phone controller
+
+With app 0.3.0 and Blueberry MyQ integration 0.7.0, native mode uses the
+signed-in official MyQ app as the controller. Sign in once inside that app.
+There is no separate Chrome login, OAuth access token, client secret, App
+Check requirement or 15-minute login window for native mode.
+
+Open the QDB panel, select the connected phone and use Open MyQ on phone.
+Unlock it and keep its door list visible. If an older Chrome flow is still
+active, use Cancel Chrome sign-in. Enter the exact door name and press
+Check connection now. Select the actual door state/control button and its
+required tap or hold gesture, then Save selected door control. Inspection and
+calibration do not operate the door.
+
+In Home Assistant, add Blueberry MyQ and choose Use the signed-in MyQ app
+through BlueberryQDB. Confirm the discovered bridge connection, or enter its
+URL and key. Submitting the native form immediately verifies the app screen
+and creates covers for calibrated doors. Disable the old cloud entry after
+you verify the new controller, to avoid two separate controls for the opener.
+
+The phone must remain unlocked, connected over ADB and showing MyQ. The relay
+uses current UI bounds and state, never saved coordinates. It refuses moving,
+unknown or offline states, changed or ambiguous controls, rapid repeated
+commands and confirmation dialogs. It does not guess or automatically press
+confirmation buttons. Some app layouts or confirmation workflows may need
+additional support after inspection on the actual phone. Native mode is more
+fragile than a supported local hardware controller.
+
+Account tokens and passwords stay in the MyQ app. The bridge keeps a private
+calibration, phone selection and connection key. Native bindings survive
+restart and app state versions 1/2 migrate to version 3. Automatic App Check
+foreground activity is disabled when native bindings exist. Native mode still
+uses the official app's network connection to MyQ; it is not an offline opener
+protocol.
+
+Synthetic hierarchy, HTTP, gesture and setup tests pass. The real phone is
+not attached to this workstation, so neither its current UI layout nor
+physical door operation has been validated by this release.
+
+The advanced App Check and separate cloud OAuth features remain available
+below for users who choose that mode.
+
 
 BlueberryQDB is a separate Home Assistant app that packages ADB and reads
 runtime App Check messages from the official Android MyQ application. It

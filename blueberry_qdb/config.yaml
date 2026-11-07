@@ -1,7 +1,7 @@
 name: BlueberryQDB
-version: "0.2.1"
+version: "0.3.0"
 slug: blueberry_qdb
-description: Android USB discovery and runtime App Check bridge for Blueberry MyQ
+description: Signed-in MyQ phone controller and Android USB bridge
 url: https://git.crit.rip/BlueberryFaygo/BlueberryFaygo
 arch: [aarch64, amd64]
 startup: services

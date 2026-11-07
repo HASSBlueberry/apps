@@ -122,10 +122,16 @@
 (defn list-rules [store]
   (vec (:rules @store)))
 
+(defn missing-static-target? [rule]
+  (and (= :static (keyword (:action rule)))
+       (or (nil? (:value rule)) (str/blank? (str (:value rule))))))
+
 (defn add-rule!
   "Insert or replace (by :id) a rule, then persist."
   [store rule]
   (let [rule (-> rule normalize-rule (update :id #(or % (str "r" (System/currentTimeMillis)))))]
+    (when (missing-static-target? rule)
+      (throw (ex-info "Static rule requires a nonempty value" {:status 400})))
     (swap! store
            (fn [s]
              (let [rules (vec (:rules s))
@@ -161,6 +167,17 @@
     (swap! store
            (fn [state]
              (let [owned (set (:config-rule-ids state))
+                   previous (into {} (map (juxt :id identity) (:rules state)))
+                   configured (mapv (fn [rule]
+                                      (if (missing-static-target? rule)
+                                        (let [old (get previous (:id rule))]
+                                          (if (and (= :static (keyword (:action old)))
+                                                   (= (:match old) (:match rule))
+                                                   (not (missing-static-target? old)))
+                                            (assoc rule :value (:value old)
+                                                        :config-warning "Configured value missing; retained saved static target")
+                                            (assoc rule :config-warning "Static rule has no target; restore value in app configuration")))
+                                        rule)) configured)
                    retained (remove #(or (contains? owned (:id %))
                                          (contains? ids (:id %))) (:rules state))]
                (assoc state :rules (into (vec retained) configured) :config-rule-ids ids))))
@@ -177,7 +194,7 @@
   (let [entry (assoc entry :ts (System/currentTimeMillis))
         action (keyword (:action entry))
         blocked? (contains? #{:blackhole :blocklist} action)
-        failed? (contains? #{:upstream-failed :forward-failed} action)
+        failed? (contains? #{:upstream-failed :forward-failed :static-invalid} action)
         domain (-> (str (:qname entry)) str/lower-case (str/replace #"\.$" ""))]
     (swap! store
            (fn [s]

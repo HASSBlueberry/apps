@@ -1,72 +1,39 @@
 <!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BlueberryQDB</title>
-<style>
-    body {
-        font: 16px system-ui;
-        background: #101923;
-        color: #edf3fa;
-        max-width: 760px;
-        margin: 3rem auto;
-        padding: 1rem
-    }
-
-    button,
-    select {
-        font: inherit;
-        padding: .7rem;
-        margin: .4rem 0;
-        border-radius: 6px
-    }
-
-    button {
-        cursor: pointer;
-        background: #bedbfa;
-        color: #102238;
-        border: 0
-    }
-
-    pre {
-        white-space: pre-wrap
-    }
-
-    code {
-        word-break: break-all
-    }
-
-    #state {
-        padding: 1rem;
-        background: #1b2b3b;
-        border-radius: 8px
-    }
-
-    p {
-        line-height: 1.5
-    }
-</style>
+<style>body{font:16px system-ui;background:#101923;color:#edf3fa;max-width:800px;margin:2rem auto;padding:1rem}button,input,select{font:inherit;padding:.7rem;margin:.4rem 0;border-radius:6px;max-width:100%;box-sizing:border-box}button{cursor:pointer;background:#bedbfa;color:#102238;border:0}button:disabled{opacity:.5;cursor:default}p{line-height:1.5}section{padding:1rem;margin:1rem 0;background:#1b2b3b;border-radius:8px}code{word-break:break-all}label{display:block}#state,#native-result,#login-state{white-space:pre-wrap;line-height:1.5}details{margin:1.5rem 0}a{color:#bedbfa}</style>
 <h1>BlueberryQDB</h1>
-<p>Connect your Android phone to Home Assistant with USB debugging enabled. Unlock the phone and approve this host when
-    Android asks.</p>
+<p>Connect and authorize the Android phone by USB. Sign in once inside the official MyQ app, unlock the phone, and leave its door list visible.</p>
 <div id="state" role="status">Looking for phones…</div>
-<label for="phone">Phone</label><br><select id="phone"></select><br>
-<button id="choose">Use this phone</button> <button id="scan">Extract App Check</button> <button id="open">Open MyQ on
-    phone</button>
-<p>Keep the official MyQ app signed in. Extraction runs automatically. If the token is missing or expired, open MyQ and
-    complete sign-in there. This app does not operate the garage door.</p>
-<section><h2>MyQ sign-in</h2><p>In Home Assistant, add Blueberry MyQ and choose Sign in on connected phone with BlueberryQDB. Complete the prompts in Chrome on the phone. Home Assistant obtains and stores the account tokens automatically.</p><div id="login-state" role="status"></div></section>
-<details>
-    <summary>Manual integration connection</summary>
-    <p>Supervisor discovery connects Blueberry MyQ automatically. If needed, use the app's network hostname with port
-        8091 and this API key.</p><button id="key">Show connection key</button><code id="connection"></code>
+<label for="phone">Phone</label><select id="phone"></select><br>
+<button id="choose">Use this phone</button> <button id="open">Open MyQ on phone</button> <button id="cancel-cloud" hidden>Cancel Chrome sign-in</button>
+<section><h2>Native MyQ controller</h2>
+<p>This mode uses the signed-in app directly. It needs no Chrome login, access token, OAuth secret or App Check token.</p>
+<label for="door-name">Exact door name shown in MyQ</label><input id="door-name" value="Garage Door" maxlength="160">
+<button id="native-check">Check connection now</button>
+<div id="native-result" role="status"></div>
+<label for="native-control">Door control to use</label><select id="native-control"><option value="">Inspect the screen first</option></select>
+<label for="native-gesture">Gesture required by MyQ</label><select id="native-gesture"><option value="tap">Tap</option><option value="hold">Hold for 1.5 seconds</option></select><br>
+<button id="native-save" disabled>Save selected door control</button>
+<p>Checking and saving do not press the control. Choose the actual door button, not a menu. HASS commands will inspect the current screen, verify the reported door state, and use this control once. Unknown states, changed controls and pending commands are refused.</p>
+<p>After saving, add Blueberry MyQ in Home Assistant and choose Use the signed-in MyQ app through BlueberryQDB. Submitting that form checks the connection immediately.</p>
+</section>
+<details><summary>Bridge connection settings</summary><p>Supervisor discovery supplies these automatically. For manual setup, use the app's network hostname with port 8091 and its connection key.</p><button id="key">Show connection key</button><code id="connection"></code></details>
+<details><summary>Advanced cloud OAuth and App Check</summary>
+<p>The cloud mode is separate from the native controller and requires its own OAuth session. Native mode does not need these steps.</p>
+<button id="scan">Extract App Check</button><div id="attestation"></div><div id="login-state"></div>
 </details>
 <script>
-    const csrf = '__CSRF__';
-    async function call(path, body) { const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', 'X-QDB-CSRF': csrf }, body: body ? JSON.stringify(body) : undefined }); if (!r.ok) { let d = await r.json().catch(() => ({})); throw Error(d.error || 'Request failed') } return r.json() }
-    async function refresh() { try { const s = await call('status'); const login=s.phone_login||{status:'idle'}; document.getElementById('login-state').textContent=({idle:'Start sign-in from the MyQ integration setup.',waiting:'Complete MyQ sign-in and verification in Chrome on the phone. You have 15 minutes once Chrome is ready.',ready:'Phone sign-in captured. Home Assistant is completing setup.',expired:'The phone sign-in expired. Start again in Home Assistant.',failed:'Phone sign-in could not finish. Check the message in Home Assistant.',cancelled:'Phone sign-in cancelled.'})[login.status]||''; if(login.status==='waiting'&&login.phase==='opening_chrome')document.getElementById('login-state').textContent='Preparing Chrome. Unlock the phone and finish any Chrome startup prompts. Your sign-in window starts afterward.'; const p = document.getElementById('phone'); const chosen = p.value || s.selected_serial; p.replaceChildren(); for (const d of s.phones) { const o = document.createElement('option'); o.value = d.serial; o.textContent = `${d.model || d.serial} (${d.state})`; o.selected = d.serial === chosen; p.append(o) } document.getElementById('state').textContent = s.app_check_refreshing ? 'Requesting App Check from MyQ on the phone. Complete any prompts there.' : s.app_check_available ? `App Check is available until ${new Date(s.expires_at * 1000).toLocaleString()}.` : `Waiting for App Check. ${s.error || ''}`; } catch (e) { document.getElementById('state').textContent = e.message } }
-    function action(id, path, body) { document.getElementById(id).onclick = async () => { try { await call(path, body()); await refresh() } catch (e) { document.getElementById('state').textContent = e.message } } }
-    action('choose', 'select', () => ({ serial: document.getElementById('phone').value })); action('scan', 'scan', () => ({})); action('open', 'open-myq', () => ({})); document.getElementById('key').onclick = async () => { try { const d = await call('connection'); document.getElementById('connection').textContent = d.app_bridge_key } catch (e) { document.getElementById('state').textContent = e.message } }; refresh(); setInterval(refresh, 15000);
-</script>
-
-</html>
+const csrf='__CSRF__';let inspection=null;
+async function call(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-QDB-CSRF':csrf},body:body?JSON.stringify(body):undefined});if(!r.ok){let d=await r.json().catch(()=>({}));throw Error(d.error||'Request failed')}return r.json()}
+const messages={native_phone_locked:'Unlock the phone and keep MyQ visible.',native_open_myq:'Open the official MyQ app and show its door list.',native_sign_in_required:'Sign in inside MyQ on the phone, then check again.',native_door_not_unique:'Enter the exact door name shown on the MyQ screen. It must identify one door.',native_state_unknown:'The app must show one clear door state, such as Open or Closed.',native_control_changed:'The screen or selected control changed. Inspect and calibrate again.',native_app_offline:'MyQ reports an offline connection. Restore it on the phone.',native_confirmation_required:'MyQ is showing a confirmation. Complete or dismiss it on the phone.',native_screen_obstructed:'Dismiss the Android window covering MyQ.',native_select_state_toggle:'Select the button that contains the current door state, rather than a separate action or menu.',native_inspect_again:'The inspection expired. Check the screen again.',native_control_not_unique:'That control is ambiguous. Select a uniquely labelled door button.',authorize_or_connect_phone:'Connect and approve USB debugging on the phone.',phone_unauthorized:'Approve this Home Assistant host on the phone.'};
+function message(error){return messages[error.message]||error.message}
+async function refresh(){try{const s=await call('status');const p=document.getElementById('phone');const selected=p.value||s.selected_serial;p.replaceChildren();for(const d of s.phones){const o=document.createElement('option');o.value=d.serial;o.textContent=`${d.model||d.serial} (${d.state})`;o.selected=d.serial===selected;p.append(o)}document.getElementById('state').textContent=s.native_binding_count?`${s.native_binding_count} native door control(s) saved. Check the current screen before using HASS.`:`${s.phones.length} phone(s) found. Select a phone and check the MyQ screen.`;document.getElementById('attestation').textContent=s.app_check_available?`App Check available until ${new Date(s.expires_at*1000).toLocaleString()}`:(s.error||'No App Check token available');const login=s.phone_login||{status:'idle'};document.getElementById('cancel-cloud').hidden=!['waiting','ready'].includes(login.status);document.getElementById('login-state').textContent=`Cloud login ${login.status}${login.phase?' ('+login.phase+')':''}`;}catch(e){document.getElementById('state').textContent=message(e)}}
+function action(id,path,body){document.getElementById(id).onclick=async()=>{try{await call(path,body());await refresh()}catch(e){document.getElementById('state').textContent=message(e)}}}
+action('cancel-cloud','cancel-cloud-login',()=>({}));action('choose','select',()=>({serial:document.getElementById('phone').value}));action('open','open-myq',()=>({}));action('scan','scan',()=>({}));
+document.getElementById('key').onclick=async()=>{try{const r=await call('connection');document.getElementById('connection').textContent=r.app_bridge_key}catch(e){document.getElementById('connection').textContent=message(e)}};
+document.getElementById('native-check').onclick=async()=>{inspection=null;document.getElementById('native-save').disabled=true;document.getElementById('native-result').textContent='Reading the MyQ screen…';try{const r=await call('native/inspect',{door_name:document.getElementById('door-name').value.trim()});inspection=r.inspection;document.getElementById('native-result').textContent=`Connected to the MyQ screen. ${r.door_name} is ${r.door_state}. Select its door control below.`;const select=document.getElementById('native-control');select.replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Choose the actual door control';select.append(placeholder);for(const control of r.controls){const o=document.createElement('option');o.value=control.key;o.textContent=control.label;select.append(o)}}catch(e){document.getElementById('native-result').textContent=message(e)}};
+document.getElementById('native-control').onchange=()=>document.getElementById('native-save').disabled=!inspection||!document.getElementById('native-control').value;
+document.getElementById('native-save').onclick=async()=>{try{const r=await call('native/bind',{inspection,control_key:document.getElementById('native-control').value,gesture:document.getElementById('native-gesture').value});document.getElementById('native-result').textContent=`Saved ${r.name}, reported ${r.door_state}. Connect the native controller from HASS setup.`;inspection=null;document.getElementById('native-save').disabled=true;await refresh()}catch(e){document.getElementById('native-result').textContent=message(e)}};
+refresh();setInterval(refresh,15000);
+</script></html>

@@ -273,12 +273,11 @@
                 (base [(prims/ptr-rr qname (:hostname ptr-record) (or (:ttl ptr-record) 300))] {}))
 
             :static
-            (do (action :static rule nil)
-                (base (static-answers qname qtype
-                                      (or (:value rule)
-                                          (get-in rule [:match :value]))
-                                      (or (:ttl rule) 300))
-                      {}))
+            (if (storage/missing-static-target? rule)
+              (do (action :static-invalid rule nil)
+                  (respond-rcode msg 2))
+              (do (action :static rule nil)
+                  (base (static-answers qname qtype (:value rule) (or (:ttl rule) 300)) {})))
 
 
             :blackhole
@@ -336,6 +335,8 @@
                       (println (str (Instant/now) " " (pr-str m)))))
         store (storage/open (str data-dir "/rules.edn"))
         _ (storage/sync-config-rules! store (:rules config))
+        _ (doseq [rule (storage/list-rules store) :when (:config-warning rule)]
+            (log {:event :dns-rule-config-warning :rule (:id rule) :message (:config-warning rule)}))
         up-store (upstreams/open (:upstreams config)
                                  {:enabled (not= false (:dns-cache-enabled config))
                                   :max-entries (or (:dns-cache-max-entries config) 10000)

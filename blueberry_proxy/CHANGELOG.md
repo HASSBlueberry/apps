@@ -1,6 +1,13 @@
 # Change Log
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](https://keepachangelog.com/).
 
+## [0.3.5]
+
+Do not replace a valid stored static target with a configuration entry whose
+value is missing. Report configuration warnings, reject invalid rule writes,
+and return SERVFAIL for a static rule with no target instead of a successful
+empty answer. This guards against value loss during optional-schema migration.
+
 ## [0.3.4]
 
 Correct Home Assistant optional schema declarations such as `value: str?`.

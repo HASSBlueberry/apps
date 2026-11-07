@@ -1,3 +1,50 @@
+# Native app controller in 0.3.0
+
+Native mode uses the account already signed in inside the official app.
+Open the QDB panel, cancel any pending Chrome flow, open MyQ and show its
+door list. Enter the exact door name and use Check connection now. This
+checks the native screen and reads the reported state. It does not require
+App Check or an OAuth account token.
+
+Choose the actual state/toggle control offered by the inspection, select Tap
+or Hold for 1.5 seconds to match the app, and save it. The bridge re-inspects
+before saving and sends no input during calibration. If no uniquely labelled
+state control exists, setup refuses calibration instead of guessing. Buttons
+that only say Open or Close without a reliable state identity are not a
+substitute for a calibrated state/toggle control.
+
+HASS integration 0.7.0 includes a native setup form. Its submit action checks
+the saved controls through the private bridge API and creates covers from
+reported app state. Existing bridge settings can be reused without copying
+account credentials. Native entries use a separate unique identity from cloud
+entries; they do not silently replace existing cloud entities. Disable an old
+cloud entry manually once native mode is verified.
+
+Each command inspects the selected phone, verifies the foreground package and
+checks for a locked screen or blocking confirmation. It locates the calibrated
+control by semantic attributes within the selected door card. Coordinates
+come from that fresh hierarchy. An already-satisfied action sends no input.
+Moving and unknown states, stale requests, ambiguous selectors, offline
+banners, changed phones and pending commands are refused. A requested gesture
+is sent once. A subsequent screen inspection detects confirmation dialogs
+without guessing their buttons. No optimistic physical state is reported.
+
+A native command can open or close a real garage door. Initial calibration and
+all automated tests in this workspace use synthetic screens and send no input
+to a physical phone. Actual operation must be verified on the connected device.
+The app's UI can change, and this release does not claim support for every
+MyQ Android layout. Keep the phone unlocked and dedicated to the app while
+using it as a controller. If MyQ requests a new login or a confirmation, complete
+it on the phone. The relay does not bypass those prompts.
+
+Native API endpoints require the bridge key. Ingress users can inspect and
+save a calibration with CSRF protection, but cannot call motion endpoints using
+Ingress authorization alone. Only the bearer-authenticated native command API
+sends a gesture. Raw screen XML is neither returned by the API nor persisted.
+Calibration selectors and the bridge key are stored privately in app state.
+State versions 1 and 2 upgrade to 3 while retaining existing keys and caches.
+No OAuth credentials are needed or copied into native HASS entries.
+
 # don't use this please chamberlain will C&D me and i will cry
 ## Phone-browser OAuth transport
 
