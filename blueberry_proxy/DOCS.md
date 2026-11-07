@@ -90,8 +90,13 @@ curl -X POST http://127.0.0.1:8054/rules -d \
   '{"id":"myts","match_type":"suffix","match":"yunext.com","action":"static","value":"192.168.1.10"}'
 ```
 
-Rules are persisted to `/data/rules.edn` and survive restarts; `options.rules`
-only seeds the file the first time it is empty.
+Rules are persisted to `/data/rules.edn` and survive restarts. Starting with
+0.3.3, `options.rules` is synchronized by ID on every app start. Configuration
+entries take precedence over stored rules with the same ID. Dashboard-only
+rules are retained. Removing an entry from configuration removes it on the
+next restart once the app has recorded configuration ownership. On the first
+upgrade, unrelated legacy rules are retained because their origin is unknown.
+Use distinct IDs for distinct hostnames, and restart after saving app options.
 
 The admin service has no authentication. Keep its default loopback bind unless
 you need LAN access, and only open it on a trusted home network when you do.

@@ -106,3 +106,14 @@ GraalJS UScan scripts can call `ctx.udpBatch(port, [{ip, hex}], durationMs)` and
 ### Local UDP exchange API
 
 Version 0.3.2 adds `POST /network/udp` for integrations that discover a device through Proxy but cannot reach it directly from HA. Send `{ "ip": "192.168.1.4", "port": 35932, "local_port": 35932, "hex": "...", "timeout_ms": 1000 }`. The response contains a `replies` array with `ip`, `port` and `hex`. Only literal local IPv4 targets are accepted. Each request sends one bounded packet to one target and listens for 250 to 3000 ms. Omitting `local_port` chooses an ephemeral port. Fixed-port receivers are serialized with UScan batches to avoid consuming each other's replies, and a busy receiver returns HTTP 503 after at most five seconds waiting for the lock. Protocol encoding and response interpretation belong to the calling integration.
+
+## Static DNS configuration updates
+
+Version 0.3.3 fixes app configuration rules being ignored after the persistent
+rule store was first populated. Rules configured in Home Assistant are now
+synchronized by ID on startup; restart the app after saving changes. Each
+hostname needs a distinct rule ID. Dashboard-only rules are preserved.
+
+For `cm.gelighting.com` and `cm-sec.gelighting.com`, two exact static rules can
+return `192.168.1.190`. IPv4-only static values intentionally return NOERROR
+with no AAAA answers for IPv6 queries. That does not suppress their A answers.

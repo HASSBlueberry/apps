@@ -104,15 +104,7 @@
       (merge (or (read-ha-options) {}))))
 
 (defn- normalize-rule [r]
-
-  (let [match (or (:match r)
-                  {:type (keyword (or (:match_type r) "suffix"))
-                   :value (or (:value r) (:match_value r) (:match r))})]
-    (-> r
-        (assoc :match {:type (keyword (or (:type match) (:match_type r) "suffix"))
-                       :value (str (or (:value match) (:match_value r) (:match r) ""))})
-        (dissoc :match_type :match_value)
-        (update :action #(keyword (or % "passthrough"))))))
+  (storage/normalize-rule r))
 
 
 
@@ -350,7 +342,7 @@
         log (fn [m] (when (:log config)
                       (println (str (Instant/now) " " (pr-str m)))))
         store (storage/open (str data-dir "/rules.edn"))
-        _ (storage/seed-rules! store (map normalize-rule (:rules config)))
+        _ (storage/sync-config-rules! store (:rules config))
         up-store (upstreams/open (:upstreams config)
                                  {:enabled (not= false (:dns-cache-enabled config))
                                   :max-entries (or (:dns-cache-max-entries config) 10000)

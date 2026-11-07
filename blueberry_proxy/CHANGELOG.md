@@ -1,6 +1,16 @@
 # Change Log
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](https://keepachangelog.com/).
 
+## [0.3.3]
+
+Synchronize Home Assistant DNS configuration by rule ID on every startup,
+including existing nonempty stores. Preserve dashboard-only rules and track
+configuration ownership so removed entries can be removed on later starts.
+Normalize both underscore and hyphen match keys consistently, preserving exact
+matching and accepting canonical DNS names with an optional trailing dot.
+Verify both GE Lighting hostnames resolve to a configured local IPv4 address
+through the UDP listener after reopening an existing store.
+
 ## [0.0.1]
 ### Added
 - IPv4 and IPv6 reverse DNS PTR record management through `/ptr`.

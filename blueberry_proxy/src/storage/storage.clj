@@ -8,9 +8,23 @@
   (:import [java.nio.file Files StandardCopyOption]
            [java.nio.file.attribute FileAttribute]))
 
+(defn normalize-rule
+  "Accept nested rules and flat API/HA keys without confusing target and match."
+  [rule]
+  (let [match (when (map? (:match rule)) (:match rule))]
+    (-> rule
+        (assoc :match {:type (keyword (or (:type match) (:match_type rule)
+                                         (:match-type rule) "suffix"))
+                       :value (str (or (:value match) (:match_value rule)
+                                       (:match-value rule)
+                                       (when (string? (:match rule)) (:match rule)) ""))})
+        (dissoc :match_type :match-type :match_value :match-value)
+        (update :action #(keyword (or % "passthrough"))))))
+
 (def default-state
   {:uscan-scanners []
    :rules []
+   :config-rule-ids #{}
    :proxy-maps []
    :proxy-listeners []
    :proxy-mounts []
@@ -24,7 +38,8 @@
   (let [f (io/file path)]
     (if (.exists f)
       (try
-        (merge default-state (dissoc (edn/read-string (slurp f)) :stats :query-log))
+        (update (merge default-state (dissoc (edn/read-string (slurp f)) :stats :query-log))
+                :rules #(mapv normalize-rule %))
         (catch Exception e
           (println "storage: cannot read" path "-" (.getMessage e))
           default-state))
@@ -52,14 +67,20 @@
 
 
 (defn- rule-type [rule]
-  (keyword (or (get-in rule [:match :type]) (:match_type rule) "suffix")))
+  (keyword (or (get-in rule [:match :type]) (:match_type rule) (:match-type rule) "suffix")))
+
+(defn- canonical-name [value]
+  (-> (str value) str/trim str/lower-case (str/replace #"\.$" "")))
 
 (defn- rule-value [rule]
-  (str/lower-case (str (or (get-in rule [:match :value]) (:match rule) ""))))
+  (let [value (or (get-in rule [:match :value]) (:match_value rule)
+                  (:match-value rule) (:match rule) "")]
+    (if (= :regex (rule-type rule)) (str/lower-case (str value)) (canonical-name value))))
 
 (defn match? [rule qname]
   (let [t (rule-type rule)
-        v (rule-value rule)]
+        v (rule-value rule)
+        qname (canonical-name qname)]
     (case t
       :exact (= qname v)
       :suffix (or (= qname v)
@@ -91,8 +112,7 @@
 (defn add-rule!
   "Insert or replace (by :id) a rule, then persist."
   [store rule]
-  (let [rule (update rule :id #(or % (str "r" (System/currentTimeMillis))))
-        rule (update rule :action #(keyword (or % "passthrough")))]
+  (let [rule (-> rule normalize-rule (update :id #(or % (str "r" (System/currentTimeMillis)))))]
     (swap! store
            (fn [s]
              (let [rules (vec (:rules s))
@@ -115,6 +135,25 @@
   [store rules]
   (when (and (seq rules) (empty? (:rules @store)))
     (doseq [r rules] (add-rule! store r))))
+
+(defn sync-config-rules!
+  "Apply configured rules by ID on every start, preserving dashboard-only rules.
+  Remove absent rules only when an earlier sync recorded configuration ownership."
+  [store rules]
+  (let [configured (mapv (fn [index rule]
+                           (-> rule normalize-rule
+                               (update :id #(or % (str "config-rule-" index)))))
+                         (range) rules)
+        ids (set (map :id configured))]
+    (swap! store
+           (fn [state]
+             (let [owned (set (:config-rule-ids state))
+                   retained (remove #(or (contains? owned (:id %))
+                                         (contains? ids (:id %))) (:rules state))]
+               (assoc state :rules (into (vec retained) configured) :config-rule-ids ids))))
+    (when-let [path (::path (meta @store))]
+      (save! path @store)))
+  nil)
 
 (defn- count-key [counts value limit]
   (if (or (contains? counts value) (< (count counts) limit))
