@@ -37,7 +37,7 @@
       (catch SocketTimeoutException _ nil)
       (catch java.net.PortUnreachableException _ nil))))
 
-(defn udp-batch! [params port messages duration check!]
+(defn- receive-udp-batch! [params port messages duration check!]
   (let [local-ips (set (map :ip (scope/interfaces)))
         local-port (:udp_local_port params 0)
         _ (when-not (and (integer? local-port) (<= 0 local-port 65535)
@@ -75,6 +75,33 @@
                                  {:ip ip :port (.getPort packet) :hex (.formatHex (java.util.HexFormat/of) (.getData packet) 0 (.getLength packet))}))
                              (catch SocketTimeoutException _ nil))]
               (recur (cond-> result received (conj received)) (+ total (if received (.getLength packet) 0))))))))))
+
+(defonce ^:private udp-listener-lock (java.util.concurrent.locks.ReentrantLock.))
+
+(defn udp-batch! [params port messages duration check!]
+  ;; A fixed source port must have one receiver across scans and API exchanges.
+  (if (.tryLock udp-listener-lock 5 TimeUnit/SECONDS)
+    (try
+      (check!)
+      (receive-udp-batch! params port messages duration check!)
+      (finally (.unlock udp-listener-lock)))
+    (throw (ex-info "UDP listener is busy; retry" {:status 503}))))
+
+(defn udp-exchange! [{:keys [ip port local_port hex timeout_ms]}]
+  (let [address (scope/ipv4-long ip)
+        _ (when-not (or (<= 167772160 address 184549375)
+                       (<= 2886729728 address 2887778303)
+                       (<= 3232235520 address 3232301055)
+                       (<= 2851995648 address 2852061183)
+                       (<= 2130706432 address 2147483647))
+            (throw (ex-info "UDP exchange requires a local IPv4 address" {})))
+        port (scope/bounded-int port nil 1 65535 "port")
+        local-port (scope/bounded-int local_port 0 0 65535 "local_port")
+        duration (scope/bounded-int timeout_ms 1000 250 3000 "timeout_ms")
+        params (scope/parameters {:cidrs [(str ip "/32")] :max_hosts 1
+                                  :ports (vec (distinct (remove zero? [port local-port])))
+                                  :duration_ms duration :udp_local_port local-port})]
+    {:replies (udp-batch! params port [{:ip ip :hex hex}] duration (fn [] nil))}))
 
 (defn tcp-scan! [params emit! check!]
   (let [pool (Executors/newFixedThreadPool (int (:workers params)))

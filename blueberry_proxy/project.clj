@@ -1,4 +1,4 @@
-(defproject blueberryProxy "0.3.1-SNAPSHOT"
+(defproject blueberryProxy "0.3.2-SNAPSHOT"
   :description "Home network DNS and HTTP proxy with reverse DNS, refreshable
                 blocklists, GraalJS transforms, LAN discovery and Home
                 Assistant add-on packaging."

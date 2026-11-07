@@ -7,7 +7,8 @@
             [dns.blocklists :as blocklists]
             [storage.storage :as storage]
             [uscan.core :as uscan]
-            [uscan.scope :as scope])
+            [uscan.scope :as scope]
+            [uscan.protocols :as protocols])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
            [java.net InetAddress InetSocketAddress NetworkInterface]
            [java.nio.charset StandardCharsets]
@@ -258,7 +259,7 @@
 (defn- handle-status [store up-store ex]
   (send-json ex 200
              {:name "blueberryProxy"
-              :version "0.3.1"
+              :version "0.3.2"
               :uptime-ms (- (System/currentTimeMillis) started-at)
               :stats (storage/stats store)
               :rules (count (storage/list-rules store))
@@ -324,6 +325,14 @@
 
                   (contains? #{"/uscan" "/uscan/devices" "/uscan/scanners" "/uscan/jobs"} path)
                   (handle-uscan uscan store ex method path query)
+
+                  (= path "/network/udp")
+                  (if (= method "POST")
+                    (try
+                      (send-json ex 200 (protocols/udp-exchange! (parse-body (read-body ex))))
+                      (catch clojure.lang.ExceptionInfo error (send-json ex (:status (ex-data error) 400) {:error (.getMessage error)}))
+                      (catch IllegalArgumentException error (send-json ex 400 {:error (.getMessage error)})))
+                    (send-json ex 405 {:error "method not allowed"}))
 
                   (= path "/settings")
                   (case method
