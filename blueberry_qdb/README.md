@@ -9,10 +9,20 @@ renewal, App Check expiry and sync time, and the last device sync. Secrets
 are not published as entity attributes. A manually pasted App Check token
 cannot renew itself. Configure BlueberryQDB to retrieve replacements.
 
-BlueberryQDB 0.4.0 keeps App Check in private persistent storage, opens MyQ
+BlueberryQDB keeps App Check in private persistent storage, opens MyQ
 near expiry, and polls its process logs for up to 60 seconds. The panel shows
 expiry and recovery state and can explicitly reveal the usable token for
 60 seconds. Do not post that token in support messages.
+
+For OAuth, use the panel's manual MyQ sign-in. It creates a PKCE authorization
+URL, then accepts the complete `com.myqops://android?...` callback copied from
+the browser. BlueberryQDB exchanges the code with its current App Check token,
+stores access and refresh tokens in its private state file, and exposes them
+through the authenticated `/v1/oauth/tokens` API. The panel can display the
+tokens and the standalone `tools/myq-oauth-exchange.py` script can perform the
+same exchange. BlueberryQ can import tokens from this endpoint and uses QDB as
+the OAuth refresh owner when the bridge is configured, preventing competing
+refresh-token rotations.
 
 Optional login recovery is disabled by default. In the Home Assistant app
 Configuration tab, set `login_recovery_enabled`, `myq_email`, `myq_password`,
@@ -23,7 +33,11 @@ It does not mark messages read, delete mail, or send mail. IMAP credentials
 are stored in Home Assistant app options, so restrict access to configuration
 and backups. Never paste credentials into chat.
 
-The bridge records a mailbox baseline before acting on the phone. It accepts
+The bridge records a mailbox baseline before acting on the phone. It opens
+MyQ, visits the profile control, scrolls the account screen to its explicit
+sign-out action, then waits for a recognized sign-in screen before entering
+credentials. If the app offers an explicit Use email option, the bridge selects
+it before handling the form. It accepts
 only new messages for the configured MyQ email, from notification@myq.com,
 with the exact six-character verification subject. Recovery stops after
 three minutes or on an unknown, locked or obstructed screen. It submits
@@ -31,9 +45,10 @@ credentials and a verification code at most once per attempt. It can select
 an explicitly labelled email delivery button. Prefilled fields that differ
 from the configured values must be cleared on the phone first. UI text input
 currently supports printable ASCII without spaces or percent characters.
-Automatic recovery has a 30-minute cooldown. It does not log out an existing
-session. The app must actually issue and log a fresh token for recovery to
-succeed. A fresh-token path has not been validated on the real login screen.
+Automatic recovery has a 30-minute cooldown. It signs out through the app's
+visible profile screen before signing in again. The app must actually issue
+and log a fresh App Check token for recovery to succeed. A fresh-token path
+has not been validated on the real login screen.
 
 ADB targets may point to an externally managed Android environment. This
 release does not package ReDroid, Magisk, Zygisk or an integrity provider.

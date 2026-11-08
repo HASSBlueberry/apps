@@ -74,10 +74,17 @@ else
         $elevate modprobe "$module" || { echo network_kernel_module_required >&2; exit 50; }
     done
     if ! $elevate podman network exists blueberry-droid; then
-        $elevate podman network create --interface-name bbdroid0 --label io.blueberry.managed=droid blueberry-droid
+        # --interface-name needs podman >= 4.5; older releases get the default
+        # interface and ownership is proven by the label below instead.
+        if $elevate podman network create --help 2>&1 | grep -q -- '--interface-name'; then
+            $elevate podman network create --interface-name bbdroid0 --label io.blueberry.managed=droid blueberry-droid
+        else
+            $elevate podman network create --label io.blueberry.managed=droid blueberry-droid
+        fi
     fi
-    interface=$($elevate podman network inspect --format '{{.NetworkInterface}}' blueberry-droid)
-    [ "$interface" = bbdroid0 ] || { echo network_name_in_use >&2; exit 49; }
+    if ! $elevate podman network inspect blueberry-droid 2>/dev/null | grep -q 'io.blueberry.managed.*droid'; then
+        echo network_name_in_use >&2; exit 49
+    fi
     $elevate mkdir -p /usr/local/lib/blueberry-droid
     $elevate tee /usr/local/lib/blueberry-droid/network.sh >/dev/null <<'POLICY'
 #!/bin/sh

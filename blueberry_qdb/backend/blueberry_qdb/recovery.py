@@ -48,7 +48,7 @@ class LoginRecovery:
                 serial=select_device(await service.android.discover(service.targets()),options.get('serial') or service.state['serial'])
                 await service.android.open_myq(serial)
                 deadline=time.monotonic()+180
-                password_sent=False;code_sent=False;actions=set()
+                password_sent=False;code_sent=False;actions=set();signed_out=False;awaiting_login=False;email_selected=False;profile_opened=False
                 while time.monotonic()<deadline:
                     await service.scan()
                     cache=service.state['cache']
@@ -56,6 +56,38 @@ class LoginRecovery:
                         self.phase='token_available';return
                     root=await self.screen(serial)
                     nodes=list(root.iter('node'))
+                    labels=[(n.get('text','')+' '+n.get('content-desc','')).strip().lower() for n in nodes]
+                    # Recovery deliberately starts from a clean official-app
+                    # session. The profile control is anchored in the lower
+                    # right corner, then the account page is scrolled to its
+                    # explicit sign-out action. Unknown layouts fail closed.
+                    if not signed_out:
+                        if any(label in ('sign in','log in','login') for label in labels):
+                            signed_out=True
+                        elif any('sign out' in label or 'log out' in label for label in labels):
+                            await self.button(serial,nodes,('sign out','log out'))
+                            signed_out=True
+                            awaiting_login=True
+                            await asyncio.sleep(2)
+                            continue
+                        elif any('profile' in label or 'account' in label for label in labels) and not profile_opened:
+                            await self.open_profile(serial,nodes)
+                            profile_opened=True
+                            await asyncio.sleep(1)
+                            continue
+                        elif profile_opened:
+                            await self.scroll(serial,down=True)
+                            await asyncio.sleep(1)
+                            continue
+                        else:
+                            await self.open_profile(serial,nodes)
+                            await asyncio.sleep(1)
+                            continue
+                    if awaiting_login:
+                        if not any(label in ('sign in','log in','login') for label in labels):
+                            await asyncio.sleep(2)
+                            continue
+                        awaiting_login=False
                     edits=[n for n in nodes if n.get('class','').endswith('EditText') and n.get('enabled')=='true']
                     passwords=[n for n in edits if n.get('password')=='true']
                     if passwords and not password_sent:
@@ -68,8 +100,12 @@ class LoginRecovery:
                         if len(passwords)!=1:raise RecoveryError('login_ui_not_recognized')
                         await self.fill(serial,passwords[0],options['myq_password'])
                         current=list((await self.screen(serial)).iter('node'))
-                        await self.button(serial,current,('log in','login','sign in'))
+                        await self.button(serial,current,('log in','login','sign in','continue'))
                         password_sent=True
+                    elif not passwords and not email_selected and any('use email' in label for label in labels):
+                        await self.button(serial,nodes,('use email',))
+                        email_selected=True
+                        await asyncio.sleep(2)
                     elif not passwords and len(edits)==1 and any('verification' in (n.get('text','')+' '+n.get('content-desc','')).lower() or 'code' in n.get('resource-id','').lower() for n in nodes):
                         self.phase='waiting_for_email'
                         if not code_sent:
@@ -124,6 +160,30 @@ class LoginRecovery:
         a,b,c,d=map(int,match.groups())
         if not (0<=a<c<=10000 and 0<=b<d<=10000):raise RecoveryError('login_ui_not_recognized')
         await self.service.android.run('-s',serial,'shell','input','tap',str((a+c)//2),str((b+d)//2))
+
+    async def open_profile(self,serial,nodes):
+        """Tap a visible profile or account control near the bottom right."""
+        candidates=[]
+        for node in nodes:
+            label=(node.get('text','')+' '+node.get('content-desc','')).lower()
+            if node.get('enabled')!='true' or node.get('clickable')!='true':continue
+            if not any(word in label for word in ('profile','account','menu')):continue
+            match=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',node.get('bounds',''))
+            if not match:continue
+            left,top,right,bottom=map(int,match.groups())
+            if left>right*.55 and top>bottom*.55:candidates.append(node)
+        if len(candidates)!=1:raise RecoveryError('login_ui_not_recognized')
+        await self.tap(serial,candidates[0])
+
+    async def scroll(self,serial,down=True):
+        """Scroll the visible account page using device dimensions."""
+        output=await self.service.android.run('-s',serial,'shell','wm','size')
+        match=re.search(r'(\d+)x(\d+)',output)
+        if not match:raise RecoveryError('login_ui_not_recognized')
+        width,height=map(int,match.groups())
+        x=width//2
+        start,end=(int(height*.35),int(height*.78)) if down else (int(height*.78),int(height*.35))
+        await self.service.android.run('-s',serial,'shell','input','swipe',str(x),str(start),str(x),str(end),'450')
 
     async def fill(self,serial,node,value):
         # ADB's shell accepts a command string. Quote secrets and prohibit input's

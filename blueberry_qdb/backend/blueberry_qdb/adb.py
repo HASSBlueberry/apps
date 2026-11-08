@@ -102,17 +102,24 @@ async def ui_dump(android, serial, path):
     before it runs, so uiautomator exits 0, prints nothing and writes no file.
     That silent failure must not be read as an empty screen: it is retried once
     after returning adbd to its unprivileged state, and only then refused.
+    Plain attempts are repeated first because a dump taken during an activity
+    transition (right after am start) fails transiently the same way.
     """
     try:
-        xml = await _dump_once(android, serial, path)
-        if not xml:
-            rooted = False
-            with suppress(ADBError, OSError):
-                rooted = (await android.run('-s', serial, 'shell', 'id', '-u')).strip() == '0'
-            if rooted:
+        xml = ''
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(1)
+            xml = await _dump_once(android, serial, path)
+            if xml:
+                break
+            if attempt == 0:
+                rooted = False
                 with suppress(ADBError, OSError):
-                    await android.unroot(serial)
-                xml = await _dump_once(android, serial, path)
+                    rooted = (await android.run('-s', serial, 'shell', 'id', '-u')).strip() == '0'
+                if rooted:
+                    with suppress(ADBError, OSError):
+                        await android.unroot(serial)
         if not xml:
             raise ADBError('android_screen_unreadable')
         return xml

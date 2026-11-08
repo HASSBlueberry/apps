@@ -31,9 +31,10 @@ credentials and a verification code at most once per attempt. It can select
 an explicitly labelled email delivery button. Prefilled fields that differ
 from the configured values must be cleared on the phone first. UI text input
 currently supports printable ASCII without spaces or percent characters.
-Automatic recovery has a 30-minute cooldown. It does not log out an existing
-session. The app must actually issue and log a fresh token for recovery to
-succeed. A fresh-token path has not been validated on the real login screen.
+Automatic recovery has a 30-minute cooldown. It signs out through the app's
+visible profile screen before signing in again. The app must actually issue
+and log a fresh App Check token for recovery to succeed. A fresh-token path
+has not been validated on the real login screen.
 
 ADB targets may point to an externally managed Android environment. This
 release does not package ReDroid, Magisk, Zygisk or an integrity provider.

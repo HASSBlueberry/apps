@@ -17,6 +17,7 @@ import tempfile
 from .adb import TARGET
 from .recovery import LoginRecovery, RecoveryError
 from .native import NativeController, NativeError
+from .oauth_exchange import OAuthExchange, OAuthExchangeError
 
 
 def save(path, value):
@@ -39,6 +40,7 @@ def migrate_state(value):
             'api_key': value.get('api_key') or secrets.token_urlsafe(32),
             'serial': value.get('serial', ''), 'cache': value.get('cache', {}),
             'native_doors':value.get('native_doors',[]),
+            **({'oauth':value['oauth']} if isinstance(value.get('oauth'),dict) else {}),
             **({'managed_adb_target':value['managed_adb_target']} if value.get('managed_adb_target') else {})}
 
 
@@ -57,6 +59,7 @@ class BridgeService:
         self.discovery_uuid = None
         self.supervisor = None
         self.logins = LoginManager(self.android)
+        self.oauth=OAuthExchange(self)
         self.refresh_task=None
         self.last_refresh_attempt=None
         self.recovery=LoginRecovery(self)
@@ -84,7 +87,9 @@ class BridgeService:
                 'expires_at': cache.get('expires_at') if usable else None, 'error': self.error,
                 'phone_login':self.logins.summary(),
                 'app_check_refreshing':bool(self.refresh_task and not self.refresh_task.done()),
-                'native_binding_count':len(self.state['native_doors'])}
+                'native_binding_count':len(self.state['native_doors']),
+                'oauth_token_available':bool(self.state.get('oauth',{}).get('access_token')),
+                'oauth_expires_at':self.state.get('oauth',{}).get('expires_at')}
 
     async def scan(self):
         async with self.lock:
@@ -184,7 +189,8 @@ class BridgeService:
 
 
 UI_PATHS = {'/', '/status', '/scan', '/select', '/open-myq', '/connection',
-            '/native/inspect','/native/bind','/native/devices','/cancel-cloud-login','/recovery/start','/recovery/cancel','/android/status'}
+            '/native/inspect','/native/bind','/native/devices','/cancel-cloud-login','/recovery/start','/recovery/cancel','/android/status',
+            '/v1/oauth/manual/start','/v1/oauth/manual/exchange','/v1/oauth/tokens','/v1/oauth/refresh'}
 
 
 def create_app(service):
@@ -204,7 +210,7 @@ def create_app(service):
             response.headers['X-Content-Type-Options'] = 'nosniff'
             response.headers['Referrer-Policy'] = 'no-referrer'
             return response
-        except (ADBError, PhoneLoginError, NativeError, RecoveryError) as error:
+        except (ADBError, PhoneLoginError, NativeError, RecoveryError, OAuthExchangeError) as error:
             return web.json_response({'error': str(error)}, status=409)
 
     app = web.Application(middlewares=[protect], client_max_size=LIMIT+1024*1024)
@@ -292,6 +298,22 @@ def create_app(service):
     async def cancel_cloud(request):
         await service.logins.close()
         return web.json_response({'cancelled':True})
+    async def oauth_begin(request):
+        return web.json_response(service.oauth.begin())
+    async def oauth_exchange(request):
+        data=await request.json()
+        callback=data.get('callback_url') if isinstance(data,dict) else None
+        return web.json_response(await service.oauth.exchange(callback))
+    async def oauth_refresh(request):
+        return web.json_response(await service.oauth.refresh())
+    async def oauth_tokens(request):
+        credentials=service.state.get('oauth',{})
+        if credentials.get('refresh_token') and credentials.get('expires_at',0)<=time.time()+120:
+            await service.oauth.refresh()
+        credentials=service.oauth.public_tokens()
+        if not credentials.get('access_token'):
+            return web.json_response({'error':'oauth_tokens_unavailable'},status=404)
+        return web.json_response(credentials)
     def android_serial():
         return service.options.get('serial') or service.state['serial']
     async def android_target(request):
@@ -410,6 +432,10 @@ def create_app(service):
     app.router.add_get('/v1/app-check', token)
     app.router.add_post('/v1/app-check', import_token)
     app.router.add_post('/v1/app-check/refresh', refresh_token)
+    app.router.add_post('/v1/oauth/manual/start',oauth_begin)
+    app.router.add_post('/v1/oauth/manual/exchange',oauth_exchange)
+    app.router.add_post('/v1/oauth/refresh',oauth_refresh)
+    app.router.add_get('/v1/oauth/tokens',oauth_tokens)
     app.router.add_post('/v1/oauth/sessions', start_login)
     app.router.add_get('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', login_result)
     app.router.add_delete('/v1/oauth/sessions/{session_id:[A-Za-z0-9_-]+}', cancel_login)
